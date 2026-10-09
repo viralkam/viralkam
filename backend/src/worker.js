@@ -9,6 +9,11 @@ export default {
     const pathname = url.pathname;
     const method = request.method;
 
+    // Serve Frontend Static Assets if not an /api route
+    if (!pathname.startsWith('/api') && env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
     // CORS Headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
@@ -264,6 +269,9 @@ export default {
         });
       }
 
+      if (env.ASSETS) {
+        return env.ASSETS.fetch(request);
+      }
       return json({ success: false, message: 'Not found' }, 404);
 
     } catch (err) {
