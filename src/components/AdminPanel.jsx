@@ -104,12 +104,30 @@ export default function AdminPanel({
     });
   }, [title, description, category, tags, duration, thumbnail, videoUrl]);
 
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+
   // Statistics
   const totalViews = videos.reduce((sum, v) => sum + (v.views || 0), 0);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!title.trim()) return;
+    setPublishError("");
+    setIsPublishing(true);
+
+    const rawUrl = videoUrl.trim();
+    // Auto-detect YouTube URL
+    const ytMatch = rawUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+    const ytId = ytMatch ? ytMatch[1] : null;
+
+    // Auto-generate high-quality thumbnail from YouTube if not specified
+    let finalThumbnail = thumbnail.trim();
+    if (!finalThumbnail && ytId) {
+      finalThumbnail = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+    } else if (!finalThumbnail) {
+      finalThumbnail = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80";
+    }
 
     // Automatic SEO, AEO, GEO compilation
     const seoAeoGeo = generateVideoSEO_AEO_GEO({
@@ -119,8 +137,8 @@ export default function AdminPanel({
       category: category,
       tags: tags,
       duration: duration.trim() || "03:30",
-      thumbnail: thumbnail.trim(),
-      videoUrl: videoUrl.trim()
+      thumbnail: finalThumbnail,
+      videoUrl: rawUrl
     });
 
     const newVideo = {
@@ -138,9 +156,9 @@ export default function AdminPanel({
         : [category, "VIRALKAM", "Viral"],
       uploadedAt: "Just now",
       author: "Admin",
-      thumbnail: thumbnail.trim() || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
-      videoUrl: videoUrl.trim() || "https://vjs.zencdn.net/v/oceans.mp4",
-      // Automated SEO, AEO, and GEO metadata
+      thumbnail: finalThumbnail,
+      videoUrl: rawUrl || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "https://vjs.zencdn.net/v/oceans.mp4"),
+      embedUrl: ytId ? `https://www.youtube.com/embed/${ytId}` : null,
       seoTitle: seoAeoGeo.seoTitle,
       seoDescription: seoAeoGeo.seoDescription,
       canonicalUrl: seoAeoGeo.canonicalUrl,
@@ -150,18 +168,24 @@ export default function AdminPanel({
       schemaJsonLd: seoAeoGeo.schemaJsonLd
     };
 
-    onAddVideo(newVideo);
-    setPublishSuccess(true);
-    setTitle("");
-    setDescription("");
-    setVideoUrl("");
-    setThumbnail("");
-    setTags("");
+    try {
+      await onAddVideo(newVideo);
+      setPublishSuccess(true);
+      setTitle("");
+      setDescription("");
+      setVideoUrl("");
+      setThumbnail("");
+      setTags("");
 
-    setTimeout(() => {
-      setPublishSuccess(false);
-      setActiveTab("manage");
-    }, 1500);
+      setTimeout(() => {
+        setPublishSuccess(false);
+        setActiveTab("manage");
+      }, 1200);
+    } catch (err) {
+      setPublishError(err.message || "Failed to publish video to Cloudflare D1.");
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   if (!isAuthenticated) {
@@ -332,7 +356,14 @@ export default function AdminPanel({
           {publishSuccess && (
             <div className="admin-alert-success">
               <CheckCircle2 size={20} />
-              <span>Video successfully published! Redirecting to video list...</span>
+              <span>Video successfully published to Cloudflare D1! Redirecting...</span>
+            </div>
+          )}
+
+          {publishError && (
+            <div className="admin-login-error" style={{ marginBottom: "1rem" }}>
+              <AlertCircle size={20} />
+              <span>{publishError}</span>
             </div>
           )}
 
@@ -429,9 +460,9 @@ export default function AdminPanel({
             </div>
 
             <div className="admin-form-actions">
-              <button type="submit" className="admin-submit-btn">
+              <button type="submit" className="admin-submit-btn" disabled={isPublishing}>
                 <Upload size={18} />
-                <span>Publish Video Live</span>
+                <span>{isPublishing ? "Saving to Cloudflare D1..." : "Publish Video Live"}</span>
               </button>
               <span className="admin-seo-note">
                 ✓ Automatic SEO, AEO & GEO metadata enabled in background for fast indexing without blocks.

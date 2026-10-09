@@ -124,12 +124,28 @@ export default function WatchView({
     return video.tags;
   }, [video]);
 
+  const ytMatch = video?.videoUrl?.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+  const youtubeId = ytMatch ? ytMatch[1] : null;
+
   return (
     <div className="watch-page-container">
       {/* Main Video Player Section */}
       <section className="player-section">
         <div className="player-inner">
-          <VideoPlayer options={playerOptions} />
+          {youtubeId ? (
+            <div className="youtube-player-frame-wrap" style={{ position: "relative", paddingBottom: "56.25%", height: 0, overflow: "hidden", borderRadius: "8px", background: "#000" }}>
+              <iframe
+                src={`https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0`}
+                title={video.title}
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+              />
+            </div>
+          ) : (
+            <VideoPlayer options={playerOptions} />
+          )}
         </div>
       </section>
 

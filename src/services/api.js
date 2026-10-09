@@ -122,23 +122,21 @@ export const api = {
    * Create / Publish new video (Admin)
    */
   async createVideo(videoData) {
-    try {
-      const token = this.getAdminToken();
-      const res = await fetch(`${API_BASE}/videos`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify(videoData)
-      });
-      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-      const data = await res.json();
-      return data.video || videoData;
-    } catch (err) {
-      console.warn('[API] Saved locally in state:', err.message);
-      return videoData;
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/videos`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(videoData)
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || `Failed to save to database (HTTP ${res.status})`);
     }
+    const data = await res.json();
+    return data.video || videoData;
   },
 
   /**

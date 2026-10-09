@@ -213,12 +213,9 @@ export default function App() {
   };
 
   const handleAddVideo = async (newVideo) => {
-    setVideos((prev) => [newVideo, ...prev]);
-    try {
-      await api.createVideo(newVideo);
-    } catch (e) {
-      console.error("Failed to save to backend:", e);
-    }
+    const saved = await api.createVideo(newVideo);
+    setVideos((prev) => [saved || newVideo, ...prev]);
+    return saved;
   };
 
   const handleDeleteVideo = async (id) => {
