@@ -18,12 +18,15 @@ export default {
       return assetRes;
     }
 
-    // CORS Headers
+    // Security & CORS Headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Referrer-Policy': 'strict-origin-when-cross-origin'
     };
 
     if (method === 'OPTIONS') {
@@ -44,11 +47,58 @@ export default {
       const expectedAdminPass = env.ADMIN_PASS || 'Viralkam.com@gmail.comR85';
       const authSecret = env.JWT_SECRET || 'vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026';
 
-      const verifyAdminToken = (req) => {
+      // Anti-Replay Attack: Generate HMAC-SHA256 signed token with timestamp
+      const createSignedToken = async (email, secret) => {
+        const timestamp = Date.now();
+        const payload = `${email}:${timestamp}`;
+        const encoder = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          'raw',
+          encoder.encode(secret),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign']
+        );
+        const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+        const sigHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+        return btoa(`${email}:${timestamp}:${sigHex}`);
+      };
+
+      // Anti-Replay Attack: Verify token signature + enforce 30-day max expiration window
+      const verifyAdminToken = async (req) => {
         const auth = req.headers.get('Authorization') || '';
-        const token = auth.replace(/^Bearer\s+/i, '').trim();
-        const validToken = btoa(`${expectedAdminId}:${authSecret}`);
-        return token === validToken;
+        const rawToken = auth.replace(/^Bearer\s+/i, '').trim();
+        if (!rawToken) return false;
+
+        try {
+          const decoded = atob(rawToken);
+          const [email, tsStr, sigHex] = decoded.split(':');
+          const ts = parseInt(tsStr, 10);
+          if (!email || !ts || !sigHex) return false;
+
+          // Reject if token is older than 30 days (Replay Attack Prevention)
+          const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+          if (Date.now() - ts > MAX_AGE_MS || ts > Date.now() + 60000) {
+            return false;
+          }
+
+          if (email.toLowerCase() !== expectedAdminId.toLowerCase()) return false;
+
+          const payload = `${email}:${ts}`;
+          const encoder = new TextEncoder();
+          const key = await crypto.subtle.importKey(
+            'raw',
+            encoder.encode(authSecret),
+            { name: 'HMAC', hash: 'SHA-256' },
+            false,
+            ['sign']
+          );
+          const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+          const expectedSigHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+          return sigHex === expectedSigHex;
+        } catch {
+          return false;
+        }
       };
 
       // 0. POST /api/admin/login
@@ -58,12 +108,12 @@ export default {
         const reqPass = (body.password || body.pass || '').trim();
 
         if (reqId === expectedAdminId.toLowerCase() && reqPass === expectedAdminPass) {
-          const token = btoa(`${expectedAdminId}:${authSecret}`);
+          const token = await createSignedToken(expectedAdminId, authSecret);
           return json({
             success: true,
             token,
             email: expectedAdminId,
-            message: 'Authenticated successfully'
+            message: 'Authenticated successfully with HMAC security'
           });
         }
         return json({
@@ -74,7 +124,8 @@ export default {
 
       // 0.1 GET /api/admin/verify
       if (pathname === '/api/admin/verify' && method === 'GET') {
-        if (verifyAdminToken(request)) {
+        const isValid = await verifyAdminToken(request);
+        if (isValid) {
           return json({ success: true, valid: true });
         }
         return json({ success: false, valid: false }, 401);
@@ -111,11 +162,13 @@ export default {
       // 3. GET /api/videos (with search, category, sorting, pagination)
       if (pathname === '/api/videos' && method === 'GET') {
         const params = url.searchParams;
-        const page = parseInt(params.get('page')) || 1;
-        const limit = parseInt(params.get('limit')) || 24;
+        // Anti-LPDos & Resource Exhaustion: strictly clamp page and limit bounds
+        const page = Math.max(1, parseInt(params.get('page')) || 1);
+        const rawLimit = parseInt(params.get('limit')) || 24;
+        const limit = Math.min(Math.max(1, rawLimit), 100);
         const offset = (page - 1) * limit;
-        const search = (params.get('search') || params.get('q') || '').trim();
-        const category = (params.get('category') || '').trim();
+        const search = (params.get('search') || params.get('q') || '').trim().slice(0, 100);
+        const category = (params.get('category') || '').trim().slice(0, 50);
         const sort = params.get('sort') || 'newest';
 
         let conditions = [];
@@ -202,7 +255,8 @@ export default {
 
       // 5. POST /api/videos (Publish new video)
       if (pathname === '/api/videos' && method === 'POST') {
-        if (!verifyAdminToken(request)) {
+        const isAdmin = await verifyAdminToken(request);
+        if (!isAdmin) {
           return json({ success: false, message: 'Unauthorized. Admin login required.' }, 401);
         }
         const body = await request.json();
@@ -255,7 +309,8 @@ export default {
 
       // 6. DELETE /api/videos/:id
       if (pathname.startsWith('/api/videos/') && method === 'DELETE') {
-        if (!verifyAdminToken(request)) {
+        const isAdmin = await verifyAdminToken(request);
+        if (!isAdmin) {
           return json({ success: false, message: 'Unauthorized. Admin login required.' }, 401);
         }
         const id = pathname.replace('/api/videos/', '');
