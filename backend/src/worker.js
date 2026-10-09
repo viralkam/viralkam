@@ -9,9 +9,13 @@ export default {
     const pathname = url.pathname;
     const method = request.method;
 
-    // Serve Frontend Static Assets if not an /api route
+    // Serve Frontend Static Assets if not an /api route (with SPA fallback)
     if (!pathname.startsWith('/api') && env.ASSETS) {
-      return env.ASSETS.fetch(request);
+      const assetRes = await env.ASSETS.fetch(request);
+      if (assetRes.status === 404) {
+        return env.ASSETS.fetch(new Request(new URL('/', request.url), request));
+      }
+      return assetRes;
     }
 
     // CORS Headers
