@@ -332,7 +332,7 @@ export default function App() {
                 <div className="empty-feed-card">
                   <h3 className="empty-feed-title">No Videos Published Yet</h3>
                   <p className="empty-feed-sub">
-                    Clean server ready! Video upload karne ke liye search box me <code>/adminenable</code> type karein.
+                    Latest viral and trending videos will appear here shortly.
                   </p>
                 </div>
               </div>
