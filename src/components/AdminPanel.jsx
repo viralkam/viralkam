@@ -172,8 +172,7 @@ export default function AdminPanel({
             <div className="admin-login-icon-ring">
               <Lock size={32} />
             </div>
-            <h2>VIRALKAM Admin Portal</h2>
-            <p>Restricted Area • Authorized Administrator Only</p>
+            <h2>Admin Portal</h2>
           </div>
 
           {loginError && (
@@ -185,12 +184,12 @@ export default function AdminPanel({
 
           <form onSubmit={handleLogin} className="admin-login-form">
             <div className="admin-login-field">
-              <label>Admin ID / Email</label>
+              <label>Admin ID</label>
               <input
                 type="text"
                 required
                 autoFocus
-                placeholder="viralkam.com@gmail.com"
+                placeholder="Enter Admin ID"
                 value={adminId}
                 onChange={(e) => setAdminId(e.target.value)}
               />
