@@ -15,10 +15,9 @@ CDN_DOMAIN = "vcdn.viralkam.com"
 [[d1_databases]]
 binding = "DB"
 database_name = "viralkam-db"
-database_id = "INSERT_YOUR_D1_DATABASE_ID_HERE"
+database_id = "59a4dfe3-6e6a-4d11-8a80-3defb6cfc77f"
 
-# Cloudflare R2 Zero-Egress Storage Bucket Binding
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "viralkam-videos"
-preview_bucket_name = "viralkam-videos-dev"
+# Cloudflare R2 Storage (Optional: uncomment after enabling R2 in Dashboard)
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "viralkam-videos"
