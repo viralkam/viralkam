@@ -73,13 +73,63 @@ export const api = {
   },
 
   /**
+   * Admin Authentication Helpers
+   */
+  getAdminToken() {
+    return localStorage.getItem('vk_admin_token') || sessionStorage.getItem('vk_admin_token') || '';
+  },
+
+  setAdminToken(token, remember = true) {
+    if (remember) {
+      localStorage.setItem('vk_admin_token', token);
+    } else {
+      sessionStorage.setItem('vk_admin_token', token);
+    }
+  },
+
+  clearAdminToken() {
+    localStorage.removeItem('vk_admin_token');
+    sessionStorage.removeItem('vk_admin_token');
+  },
+
+  async loginAdmin(id, password) {
+    const res = await fetch(`${API_BASE}/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, password })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Invalid credentials');
+    }
+    return data;
+  },
+
+  async verifyAdmin() {
+    const token = this.getAdminToken();
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/admin/verify`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
    * Create / Publish new video (Admin)
    */
   async createVideo(videoData) {
     try {
+      const token = this.getAdminToken();
       const res = await fetch(`${API_BASE}/videos`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify(videoData)
       });
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
@@ -96,8 +146,12 @@ export const api = {
    */
   async deleteVideo(id) {
     try {
+      const token = this.getAdminToken();
       const res = await fetch(`${API_BASE}/videos/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
       });
       return res.ok;
     } catch (err) {

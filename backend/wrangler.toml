@@ -10,6 +10,9 @@ ENVIRONMENT = "production"
 SITE_NAME = "VIRALKAM.COM"
 CONTACT_EMAIL = "viralkam.com@gmail.com"
 CDN_DOMAIN = "vcdn.viralkam.com"
+ADMIN_EMAIL = "viralkam.com@gmail.com"
+ADMIN_PASS = "Viralkam.com@gmail.comR85"
+JWT_SECRET = "vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026"
 
 # Cloudflare D1 Serverless Database Binding
 [[d1_databases]]

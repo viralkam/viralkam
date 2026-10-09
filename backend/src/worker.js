@@ -39,6 +39,47 @@ export default {
     };
 
     try {
+      // Admin Credentials from Cloudflare Environment Vars
+      const expectedAdminId = env.ADMIN_EMAIL || 'viralkam.com@gmail.com';
+      const expectedAdminPass = env.ADMIN_PASS || 'Viralkam.com@gmail.comR85';
+      const authSecret = env.JWT_SECRET || 'vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026';
+
+      const verifyAdminToken = (req) => {
+        const auth = req.headers.get('Authorization') || '';
+        const token = auth.replace(/^Bearer\s+/i, '').trim();
+        const validToken = btoa(`${expectedAdminId}:${authSecret}`);
+        return token === validToken;
+      };
+
+      // 0. POST /api/admin/login
+      if (pathname === '/api/admin/login' && method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const reqId = (body.id || body.email || body.username || '').trim().toLowerCase();
+        const reqPass = (body.password || body.pass || '').trim();
+
+        if (reqId === expectedAdminId.toLowerCase() && reqPass === expectedAdminPass) {
+          const token = btoa(`${expectedAdminId}:${authSecret}`);
+          return json({
+            success: true,
+            token,
+            email: expectedAdminId,
+            message: 'Authenticated successfully'
+          });
+        }
+        return json({
+          success: false,
+          message: 'Invalid Admin ID or Password'
+        }, 401);
+      }
+
+      // 0.1 GET /api/admin/verify
+      if (pathname === '/api/admin/verify' && method === 'GET') {
+        if (verifyAdminToken(request)) {
+          return json({ success: true, valid: true });
+        }
+        return json({ success: false, valid: false }, 401);
+      }
+
       // 1. Health check
       if (pathname === '/api/health') {
         return json({
@@ -161,6 +202,9 @@ export default {
 
       // 5. POST /api/videos (Publish new video)
       if (pathname === '/api/videos' && method === 'POST') {
+        if (!verifyAdminToken(request)) {
+          return json({ success: false, message: 'Unauthorized. Admin login required.' }, 401);
+        }
         const body = await request.json();
         if (!body.title) {
           return json({ success: false, message: 'Title is required' }, 400);
@@ -211,6 +255,9 @@ export default {
 
       // 6. DELETE /api/videos/:id
       if (pathname.startsWith('/api/videos/') && method === 'DELETE') {
+        if (!verifyAdminToken(request)) {
+          return json({ success: false, message: 'Unauthorized. Admin login required.' }, 401);
+        }
         const id = pathname.replace('/api/videos/', '');
         await env.DB.prepare('DELETE FROM videos WHERE id = ?').bind(id).run();
         return json({ success: true, message: `Video ${id} removed` });

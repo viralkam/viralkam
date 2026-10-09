@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { 
   Upload, 
   Film, 
   Trash2, 
   Eye, 
+  EyeOff,
   ArrowLeft, 
   PlusCircle, 
   BarChart3, 
@@ -14,9 +15,14 @@ import {
   Globe,
   Bot,
   Search,
-  Check
+  Check,
+  Lock,
+  ShieldCheck,
+  LogOut,
+  AlertCircle
 } from "lucide-react";
 import { generateVideoSEO_AEO_GEO } from "../utils/seoEngine";
+import { api } from "../services/api";
 
 export default function AdminPanel({
   videos,
@@ -26,7 +32,52 @@ export default function AdminPanel({
   onExitAdmin,
   onViewVideo
 }) {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(api.getAdminToken()));
+  const [adminId, setAdminId] = useState("");
+  const [adminPass, setAdminPass] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+  const [loginError, setLoginError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   const [activeTab, setActiveTab] = useState("upload"); // "upload" | "manage"
+
+  // Verify stored token on mount
+  useEffect(() => {
+    async function checkToken() {
+      if (api.getAdminToken()) {
+        const isValid = await api.verifyAdmin();
+        if (!isValid) {
+          api.clearAdminToken();
+          setIsAuthenticated(false);
+        }
+      }
+    }
+    checkToken();
+  }, []);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError("");
+    setIsLoggingIn(true);
+    try {
+      const res = await api.loginAdmin(adminId, adminPass);
+      if (res && res.token) {
+        api.setAdminToken(res.token, rememberMe);
+        setIsAuthenticated(true);
+        setAdminPass("");
+      }
+    } catch (err) {
+      setLoginError(err.message || "Invalid Admin ID or Password. Access Denied.");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = () => {
+    api.clearAdminToken();
+    setIsAuthenticated(false);
+  };
 
   // Form State
   const [title, setTitle] = useState("");
@@ -113,6 +164,91 @@ export default function AdminPanel({
     }, 1500);
   };
 
+  if (!isAuthenticated) {
+    return (
+      <div className="admin-login-wrapper">
+        <div className="admin-login-box">
+          <div className="admin-login-badge">
+            <div className="admin-login-icon-ring">
+              <Lock size={32} />
+            </div>
+            <h2>VIRALKAM Admin Portal</h2>
+            <p>Restricted Area • Authorized Administrator Only</p>
+          </div>
+
+          {loginError && (
+            <div className="admin-login-error">
+              <AlertCircle size={18} />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} className="admin-login-form">
+            <div className="admin-login-field">
+              <label>Admin ID / Email</label>
+              <input
+                type="text"
+                required
+                autoFocus
+                placeholder="viralkam.com@gmail.com"
+                value={adminId}
+                onChange={(e) => setAdminId(e.target.value)}
+              />
+            </div>
+
+            <div className="admin-login-field">
+              <label>Password</label>
+              <div className="admin-password-wrap">
+                <input
+                  type={showPass ? "text" : "password"}
+                  required
+                  placeholder="Enter secret password"
+                  value={adminPass}
+                  onChange={(e) => setAdminPass(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="password-toggle-btn"
+                  onClick={() => setShowPass(!showPass)}
+                  tabIndex={-1}
+                >
+                  {showPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-login-options">
+              <label className="admin-remember-label">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                />
+                <span>Remember this device for 30 days</span>
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              className="admin-login-submit-btn"
+              disabled={isLoggingIn}
+            >
+              <ShieldCheck size={18} />
+              <span>{isLoggingIn ? "Authenticating..." : "Sign In to Admin Portal"}</span>
+            </button>
+          </form>
+
+          <div className="admin-login-footer">
+            <button className="admin-return-btn" onClick={onExitAdmin}>
+              <ArrowLeft size={15} />
+              <span>Return to Public Website</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="admin-wrapper">
       {/* Admin Header */}
@@ -128,20 +264,27 @@ export default function AdminPanel({
           </div>
         </div>
 
-        <div className="admin-tabs">
-          <button
-            className={`admin-tab-btn ${activeTab === "upload" ? "active" : ""}`}
-            onClick={() => setActiveTab("upload")}
-          >
-            <PlusCircle size={16} />
-            <span>Upload New Video</span>
-          </button>
-          <button
-            className={`admin-tab-btn ${activeTab === "manage" ? "active" : ""}`}
-            onClick={() => setActiveTab("manage")}
-          >
-            <ListVideo size={16} />
-            <span>Manage Videos ({videos.length})</span>
+        <div className="admin-header-right-group">
+          <div className="admin-tabs">
+            <button
+              className={`admin-tab-btn ${activeTab === "upload" ? "active" : ""}`}
+              onClick={() => setActiveTab("upload")}
+            >
+              <PlusCircle size={16} />
+              <span>Upload New Video</span>
+            </button>
+            <button
+              className={`admin-tab-btn ${activeTab === "manage" ? "active" : ""}`}
+              onClick={() => setActiveTab("manage")}
+            >
+              <ListVideo size={16} />
+              <span>Manage Videos ({videos.length})</span>
+            </button>
+          </div>
+
+          <button className="admin-logout-btn" onClick={handleLogout} title="Sign Out of Admin Portal">
+            <LogOut size={16} />
+            <span>Logout</span>
           </button>
         </div>
       </header>
