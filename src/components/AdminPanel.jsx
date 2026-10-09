@@ -80,16 +80,73 @@ export default function AdminPanel({
   };
 
   // Form State
+  const [videoSourceType, setVideoSourceType] = useState("link"); // "link" | "file"
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState(categories[0] || "General");
   const [videoUrl, setVideoUrl] = useState("");
   const [thumbnail, setThumbnail] = useState("");
-  const [duration, setDuration] = useState("04:20");
+  const [duration, setDuration] = useState("03:30");
   const [tags, setTags] = useState("");
   const [viewsInitial, setViewsInitial] = useState(0);
-  const [ratingInitial, setRatingInitial] = useState(95);
+  const [ratingInitial, setRatingInitial] = useState(100);
   const [publishSuccess, setPublishSuccess] = useState(false);
+  const [videoFile, setVideoFile] = useState(null);
+
+  // Handle YouTube link paste - auto set thumbnail
+  const handleVideoUrlChange = (val) => {
+    setVideoUrl(val);
+    const ytMatch = val.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+    if (ytMatch && ytMatch[1] && (!thumbnail || thumbnail.includes('youtube.com/vi'))) {
+      setThumbnail(`https://img.youtube.com/vi/${ytMatch[1]}/hqdefault.jpg`);
+    }
+  };
+
+  // Handle local device video upload - auto duration & frame thumbnail
+  const handleDeviceVideoSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setVideoFile(file);
+    const objUrl = URL.createObjectURL(file);
+    setVideoUrl(objUrl);
+
+    // Auto title if empty
+    if (!title) {
+      const cleanName = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
+      setTitle(cleanName);
+    }
+
+    // Auto duration and frame extraction
+    try {
+      const tempVideo = document.createElement("video");
+      tempVideo.preload = "metadata";
+      tempVideo.src = objUrl;
+      tempVideo.onloadedmetadata = () => {
+        const sec = Math.floor(tempVideo.duration) || 0;
+        const m = Math.floor(sec / 60).toString().padStart(2, "0");
+        const s = (sec % 60).toString().padStart(2, "0");
+        setDuration(`${m}:${s}`);
+        tempVideo.currentTime = Math.min(1.5, Math.max(0.5, tempVideo.duration / 4));
+      };
+      tempVideo.onseeked = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.min(tempVideo.videoWidth || 640, 1280);
+          canvas.height = Math.min(tempVideo.videoHeight || 360, 720);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
+          const thumbData = canvas.toDataURL("image/jpeg", 0.8);
+          if (thumbData && !thumbnail) {
+            setThumbnail(thumbData);
+          }
+        } catch (err) {
+          console.warn("Could not extract frame", err);
+        }
+      };
+    } catch (err) {
+      console.warn("Video metadata parse error", err);
+    }
+  };
 
   // Live Auto-Generated SEO, AEO, and GEO Engine State
   const autoSeoData = useMemo(() => {
@@ -413,30 +470,108 @@ export default function AdminPanel({
               </div>
             </div>
 
+            {/* Video Source Selector */}
             <div className="admin-form-group">
-              <label>Direct Video File URL (MP4 / WebM / HLS) *</label>
-              <input
-                type="url"
-                placeholder="https://your-server.com/videos/video-file.mp4"
-                value={videoUrl}
-                onChange={(e) => setVideoUrl(e.target.value)}
-              />
-              <span className="admin-hint">
-                You can host videos on your server, CDN, S3, or direct MP4 link. (Leave blank to use default demo stream)
-              </span>
+              <label>Video Source *</label>
+              <div style={{ display: "flex", gap: "10px", marginBottom: "12px" }}>
+                <button
+                  type="button"
+                  onClick={() => setVideoSourceType("link")}
+                  style={{
+                    flex: 1,
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: "1px solid",
+                    borderColor: videoSourceType === "link" ? "#3b82f6" : "#334155",
+                    background: videoSourceType === "link" ? "rgba(59, 130, 246, 0.2)" : "rgba(30, 41, 59, 0.5)",
+                    color: videoSourceType === "link" ? "#60a5fa" : "#94a3b8",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px"
+                  }}
+                >
+                  <Globe size={18} />
+                  <span>Paste Link (YouTube / Cloud / CDN)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVideoSourceType("file")}
+                  style={{
+                    flex: 1,
+                    padding: "10px",
+                    borderRadius: "8px",
+                    border: "1px solid",
+                    borderColor: videoSourceType === "file" ? "#3b82f6" : "#334155",
+                    background: videoSourceType === "file" ? "rgba(59, 130, 246, 0.2)" : "rgba(30, 41, 59, 0.5)",
+                    color: videoSourceType === "file" ? "#60a5fa" : "#94a3b8",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px"
+                  }}
+                >
+                  <Film size={18} />
+                  <span>Upload from Device (Local Video)</span>
+                </button>
+              </div>
+
+              {videoSourceType === "link" ? (
+                <div>
+                  <input
+                    type="url"
+                    placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...) or Google Cloud / CDN URL"
+                    value={videoUrl}
+                    onChange={(e) => handleVideoUrlChange(e.target.value)}
+                  />
+                  <span className="admin-hint" style={{ color: "#38bdf8", marginTop: "6px", display: "block" }}>
+                    💡 YouTube videos will automatically extract video ID, high-resolution thumbnail, and setup instant streaming!
+                  </span>
+                </div>
+              ) : (
+                <div style={{ background: "rgba(15, 23, 42, 0.6)", padding: "16px", borderRadius: "8px", border: "1px dashed #475569" }}>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/webm,video/ogg,video/quicktime,video/*"
+                    onChange={handleDeviceVideoSelect}
+                    style={{ marginBottom: "8px" }}
+                  />
+                  <span className="admin-hint" style={{ color: "#10b981", display: "block" }}>
+                    ✓ Auto-detects exact video duration & auto-captures frame thumbnail from your file!
+                  </span>
+                  {videoFile && (
+                    <div style={{ marginTop: "8px", fontSize: "13px", color: "#93c5fd" }}>
+                      Selected: <strong>{videoFile.name}</strong> ({(videoFile.size / (1024 * 1024)).toFixed(1)} MB)
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="admin-form-group">
-              <label>Thumbnail Image URL (16:9 Cover)</label>
-              <input
-                type="url"
-                placeholder="https://images.unsplash.com/... or /path/to/thumb.jpg"
-                value={thumbnail}
-                onChange={(e) => setThumbnail(e.target.value)}
-              />
-              <span className="admin-hint">
-                Recommended 640x360 or 1280x720 cover image.
-              </span>
+              <label>Thumbnail (Auto-generated or custom)</label>
+              <div style={{ display: "flex", gap: "14px", alignItems: "flex-start" }}>
+                {thumbnail && (
+                  <div style={{ width: "120px", height: "68px", borderRadius: "6px", overflow: "hidden", border: "1px solid #334155", flexShrink: 0 }}>
+                    <img src={thumbnail} alt="Preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  </div>
+                )}
+                <div style={{ flex: 1 }}>
+                  <input
+                    type="text"
+                    placeholder="Thumbnail URL (Auto-filled from YouTube or device frame)"
+                    value={thumbnail}
+                    onChange={(e) => setThumbnail(e.target.value)}
+                  />
+                  <span className="admin-hint">
+                    Leave blank to use automatically generated thumbnail.
+                  </span>
+                </div>
+              </div>
             </div>
 
             <div className="admin-form-group">
