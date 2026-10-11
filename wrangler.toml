@@ -22,7 +22,7 @@ binding = "DB"
 database_name = "viralkam-db"
 database_id = "59a4dfe3-6e6a-4d11-8a80-3defb6cfc77f"
 
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "viralkam-videos"
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "viralkam-videos"
 
