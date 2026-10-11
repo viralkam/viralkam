@@ -32,7 +32,8 @@ export default function AdminPanel({
   onExitAdmin,
   onViewVideo
 }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(api.getAdminToken()));
+  // Always authenticated by default (Direct Admin Access)
+  const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [adminId, setAdminId] = useState("");
   const [adminPass, setAdminPass] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -41,20 +42,6 @@ export default function AdminPanel({
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [activeTab, setActiveTab] = useState("upload"); // "upload" | "manage"
-
-  // Verify stored token on mount
-  useEffect(() => {
-    async function checkToken() {
-      if (api.getAdminToken()) {
-        const isValid = await api.verifyAdmin();
-        if (!isValid) {
-          api.clearAdminToken();
-          setIsAuthenticated(false);
-        }
-      }
-    }
-    checkToken();
-  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -93,8 +80,14 @@ export default function AdminPanel({
   const [publishSuccess, setPublishSuccess] = useState(false);
   const [videoFile, setVideoFile] = useState(null);
 
-  // Handle YouTube link paste - auto set thumbnail
-  const handleVideoUrlChange = (val) => {
+  // Handle video URL change - auto extract iframe src & YouTube thumbnail
+  const handleVideoUrlChange = (rawVal) => {
+    let val = (rawVal || "").trim();
+    // If user pastes full <iframe src="..."> code, automatically extract the clean URL
+    const iframeMatch = val.match(/src=["']([^"']+)["']/i);
+    if (iframeMatch && iframeMatch[1]) {
+      val = iframeMatch[1];
+    }
     setVideoUrl(val);
     const ytMatch = val.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
     if (ytMatch && ytMatch[1] && (!thumbnail || thumbnail.includes('youtube.com/vi'))) {

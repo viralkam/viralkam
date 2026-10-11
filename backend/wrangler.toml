@@ -8,11 +8,11 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "production"
 SITE_NAME = "VIRALKAM.COM"
-CONTACT_EMAIL = "viralkam.com@gmail.com"
+CONTACT_EMAIL = "contact@yourdomain.com"
 CDN_DOMAIN = "vcdn.viralkam.com"
-ADMIN_EMAIL = "viralkam.com@gmail.com"
-ADMIN_PASS = "Viralkam.com@gmail.comR85"
-JWT_SECRET = "vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026"
+ADMIN_EMAIL = "admin@yourdomain.com"
+ADMIN_PASS = "ChangeMeInProduction"
+JWT_SECRET = "change_me_to_a_random_secret_in_production"
 
 # Cloudflare D1 Serverless Database Binding
 [[d1_databases]]

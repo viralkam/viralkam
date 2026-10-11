@@ -52,7 +52,14 @@ npx wrangler d1 execute viralkam-db --file=./seed.sql
 npx wrangler r2 bucket create viralkam-videos
 ```
 
-### Step 5: Deploy Worker to Cloudflare Global Edge
+### Step 5: Set Production Secrets (Never Commit Passwords to Git!)
+Sensitive credentials (jaise `ADMIN_PASS` aur `JWT_SECRET`) ko Cloudflare Dashboard ke **Settings > Variables & Secrets** me add karein ya terminal se run karein:
+```bash
+npx wrangler secret put ADMIN_PASS
+npx wrangler secret put JWT_SECRET
+```
+
+### Step 6: Deploy Worker to Cloudflare Global Edge
 ```bash
 npx wrangler deploy
 ```
@@ -72,5 +79,5 @@ Done! Your API will be live globally at `https://viralkam-api.<your-subdomain>.w
 | `DELETE` | `/api/videos/:id` | Delete video (Admin) |
 | `POST` | `/api/videos/:id/vote` | Upvote / Downvote |
 | `GET` | `/api/categories` | Categories list with video counts |
-| `POST` | `/api/reports` | DMCA / Removal requests (viralkam.com@gmail.com) |
+| `POST` | `/api/reports` | DMCA / Removal requests (contact@yourdomain.com) |
 | `POST` | `/api/r2/upload` | Direct video upload to Cloudflare R2 |

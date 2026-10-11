@@ -1,13 +1,75 @@
 import http from 'node:http';
 import url from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { initDatabase } from './seed.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Automatically load .env and .env.local (Node.js 20+ native support)
+if (typeof process.loadEnvFile === 'function') {
+  const envCandidates = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(__dirname, '../.env'),
+    path.resolve(__dirname, '../.env.local'),
+    path.resolve(__dirname, '.env'),
+    path.resolve(__dirname, '.env.local')
+  ];
+  for (const envPath of envCandidates) {
+    if (fs.existsSync(envPath)) {
+      try {
+        process.loadEnvFile(envPath);
+      } catch {}
+    }
+  }
+}
+
+import { initDatabase } from './seed.js';
+
 const PORT = process.env.PORT || 5000;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@localhost.local';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
+const JWT_SECRET = process.env.JWT_SECRET || 'local_development_jwt_secret_32_chars_min';
+const CDN_DOMAIN = process.env.CDN_DOMAIN || 'vcdn.viralkam.com';
+const SITE_NAME = process.env.SITE_NAME || 'VIRALKAM';
+const CONTACT_EMAIL = process.env.CONTACT_EMAIL || 'contact@yourdomain.com';
+
+// Token generation & verification helpers
+function createSignedToken(email, secret) {
+  const timestamp = Date.now();
+  const payload = `${email}:${timestamp}`;
+  const sigHex = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return Buffer.from(`${email}:${timestamp}:${sigHex}`).toString('base64');
+}
+
+function verifyAdminToken(req, expectedEmail, secret) {
+  const auth = req.headers['authorization'] || '';
+  const rawToken = auth.replace(/^Bearer\s+/i, '').trim();
+  if (!rawToken) return false;
+
+  const legacyToken = Buffer.from(`${expectedEmail}:${secret}`).toString('base64');
+  if (rawToken === legacyToken) return true;
+
+  try {
+    const decoded = Buffer.from(rawToken, 'base64').toString('utf8');
+    const [email, tsStr, sigHex] = decoded.split(':');
+    const ts = parseInt(tsStr, 10);
+    if (!email || !ts || !sigHex) return false;
+
+    const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+    if (Date.now() - ts > MAX_AGE_MS || ts > Date.now() + 60000) return false;
+    if (email.toLowerCase() !== expectedEmail.toLowerCase()) return false;
+
+    const expectedSig = crypto.createHmac('sha256', secret).update(`${email}:${ts}`).digest('hex');
+    return sigHex === expectedSig;
+  } catch {
+    return false;
+  }
+}
+
 const db = initDatabase();
 
 // Helper to set CORS & JSON headers
@@ -99,11 +161,41 @@ const server = http.createServer(async (req, res) => {
   const query = parsedUrl.query;
 
   try {
+    // 0. POST /api/admin/login
+    if (pathname === '/api/admin/login' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const reqId = (body.id || body.email || body.username || '').trim().toLowerCase();
+      const reqPass = (body.password || body.pass || '').trim();
+
+      if (reqId === ADMIN_EMAIL.toLowerCase() && reqPass === ADMIN_PASS) {
+        const token = createSignedToken(ADMIN_EMAIL, JWT_SECRET);
+        return sendJson(res, 200, {
+          success: true,
+          token,
+          email: ADMIN_EMAIL,
+          message: 'Authenticated successfully'
+        });
+      }
+      return sendJson(res, 401, {
+        success: false,
+        message: 'Invalid Admin ID or Password'
+      });
+    }
+
+    // 0.1 GET /api/admin/verify
+    if (pathname === '/api/admin/verify' && req.method === 'GET') {
+      const isValid = verifyAdminToken(req, ADMIN_EMAIL, JWT_SECRET);
+      if (isValid) {
+        return sendJson(res, 200, { success: true, valid: true });
+      }
+      return sendJson(res, 401, { success: false, valid: false });
+    }
+
     // 1. Health check
     if (pathname === '/api/health' && req.method === 'GET') {
       return sendJson(res, 200, {
         status: 'online',
-        service: 'VIRALKAM.COM API',
+        service: `${SITE_NAME} API`,
         database: 'Cloudflare D1 / SQLite Engine',
         timestamp: new Date().toISOString()
       });
@@ -225,6 +317,12 @@ const server = http.createServer(async (req, res) => {
         )
       `);
 
+      const toSqlString = (val) => {
+        if (val === null || val === undefined) return null;
+        if (typeof val === 'object') return JSON.stringify(val);
+        return String(val);
+      };
+
       insertStmt.run(
         id,
         data.title,
@@ -235,7 +333,7 @@ const server = http.createServer(async (req, res) => {
         Number(data.dislikes || 0),
         Number(data.rating || 95),
         data.category || 'General',
-        JSON.stringify(Array.isArray(data.tags) ? data.tags : (data.tags ? data.tags.split(',') : [])),
+        toSqlString(data.tags || []),
         data.uploadedAt || 'Just now',
         data.author || 'VIRALKAM Admin',
         data.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
@@ -245,10 +343,10 @@ const server = http.createServer(async (req, res) => {
         data.seoTitle || null,
         data.seoDescription || null,
         data.canonicalUrl || null,
-        data.aeoSummary || null,
-        data.aeoKeyFacts || null,
-        JSON.stringify(data.geoEntities || []),
-        data.schemaJsonLd || null
+        toSqlString(data.aeoSummary),
+        toSqlString(data.aeoKeyFacts),
+        toSqlString(data.geoEntities || []),
+        toSqlString(data.schemaJsonLd)
       );
 
       const created = db.prepare('SELECT * FROM videos WHERE id = ?').get(id);
@@ -303,12 +401,12 @@ const server = http.createServer(async (req, res) => {
         report.videoId || 'unknown',
         report.videoTitle || 'N/A',
         report.reason || 'DMCA / Copyright / Request',
-        report.email || 'viralkam.com@gmail.com'
+        report.email || CONTACT_EMAIL
       );
 
       return sendJson(res, 201, {
         success: true,
-        message: 'Report received. Our moderation team (viralkam.com@gmail.com) will review within 24 hours.'
+        message: `Report received. Our moderation team (${CONTACT_EMAIL}) will review within 24 hours.`
       });
     }
 
@@ -322,7 +420,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         success: true,
         uploadKey: uniqueKey,
-        publicUrl: `https://vcdn.viralkam.com/${uniqueKey}`,
+        publicUrl: `https://${CDN_DOMAIN}/${uniqueKey}`,
         message: 'Cloudflare R2 target URL generated'
       });
     }
@@ -338,10 +436,12 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`===============================================`);
-  console.log(`🚀 VIRALKAM.COM Backend Server Running!`);
+  console.log(`🚀 ${SITE_NAME} Backend Server Running!`);
   console.log(`📡 URL: http://localhost:${PORT}`);
   console.log(`💾 Database: SQLite (Cloudflare D1 Compatible Engine)`);
   console.log(`⚡ Endpoints:`);
+  console.log(`   - POST /api/admin/login`);
+  console.log(`   - GET  /api/admin/verify`);
   console.log(`   - GET  /api/health`);
   console.log(`   - GET  /api/videos`);
   console.log(`   - GET  /api/videos/:id`);

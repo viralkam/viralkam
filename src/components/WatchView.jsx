@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import VideoPlayer from "./VideoPlayer";
 import VideoCard from "./VideoCard";
+import { CONFIG } from "../config";
 import { 
   ThumbsUp, 
   ThumbsDown, 
@@ -79,15 +80,32 @@ export default function WatchView({
     autoplay: false,
     controls: true,
     responsive: true,
-    fluid: true,
+    fluid: false,
+    aspectRatio: "16:9",
     poster: video.thumbnail,
     sources: [
       {
         src: video.videoUrl,
-        type: "video/mp4"
+        type: video.videoUrl && video.videoUrl.includes(".m3u8") ? "application/x-mpegURL" : "video/mp4"
       }
     ]
   };
+
+  // Detect if video is an iframe embed (Streamtape, Dood, Vidhide, etc.)
+  const isEmbed = Boolean(
+    video.embedUrl ||
+    (video.videoUrl && (
+      video.videoUrl.includes("/embed/") ||
+      video.videoUrl.includes("/e/") ||
+      video.videoUrl.includes("dood") ||
+      video.videoUrl.includes("streamtape") ||
+      video.videoUrl.includes("vidhide") ||
+      video.videoUrl.includes("luluvdo") ||
+      video.videoUrl.includes("voe.sx") ||
+      video.videoUrl.includes("filemoon")
+    ))
+  );
+  const embedSourceUrl = video.embedUrl || video.videoUrl;
 
   // Smart Suggestion Logic:
   // 1. Same category videos first
@@ -143,6 +161,18 @@ export default function WatchView({
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
               />
             </div>
+          ) : isEmbed ? (
+            <div className="youtube-player-frame-wrap" style={{ position: "relative", paddingBottom: "56.25%", height: 0, overflow: "hidden", borderRadius: "8px", background: "#000" }}>
+              <iframe
+                src={embedSourceUrl}
+                title={video.title}
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="no-referrer"
+                allowFullScreen
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+              />
+            </div>
           ) : (
             <VideoPlayer options={playerOptions} />
           )}
@@ -157,7 +187,7 @@ export default function WatchView({
             if (onSelectLegalPage) {
               onSelectLegalPage("dmca");
             } else {
-              window.location.href = "mailto:viralkam.com@gmail.com?subject=Video Removal Request";
+              window.location.href = `mailto:${CONFIG.CONTACT_EMAIL}?subject=Video Removal Request`;
             }
           }}
           title="Report or request removal of this video"

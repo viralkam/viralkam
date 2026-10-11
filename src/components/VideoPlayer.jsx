@@ -10,7 +10,8 @@ export default function VideoPlayer({ options, onReady }) {
     // Make sure Video.js player is only initialized once
     if (!playerRef.current && videoRef.current) {
       const videoElement = document.createElement("video-js");
-      videoElement.classList.add("vjs-big-play-centered", "vjs-fluid");
+      videoElement.classList.add("vjs-big-play-centered", "vjs-16-9");
+      videoElement.setAttribute("referrerpolicy", "no-referrer");
       videoRef.current.appendChild(videoElement);
 
       const player = (playerRef.current = videojs(videoElement, options, () => {

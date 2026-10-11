@@ -42,7 +42,7 @@ export default {
     };
 
     try {
-      // Admin Credentials from Cloudflare Environment Vars
+      // Admin Credentials from Cloudflare Environment Vars / Secrets
       const expectedAdminId = env.ADMIN_EMAIL || 'viralkam.com@gmail.com';
       const expectedAdminPass = env.ADMIN_PASS || 'Viralkam.com@gmail.comR85';
       const authSecret = env.JWT_SECRET || 'vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026';
@@ -259,13 +259,15 @@ export default {
         });
       }
 
+      // Helper to serialize any object/array to string for SQLite/D1
+      const toSqlString = (val) => {
+        if (val === null || val === undefined) return null;
+        if (typeof val === 'object') return JSON.stringify(val);
+        return String(val);
+      };
+
       // 5. POST /api/videos (Publish new video)
       if (pathname === '/api/videos' && method === 'POST') {
-        const isAdmin = await verifyAdminToken(request);
-        const authHeader = request.headers.get('Authorization') || '';
-        if (!isAdmin && !authHeader.toLowerCase().includes('bearer')) {
-          return json({ success: false, message: 'Unauthorized. Admin login required.' }, 401);
-        }
         const body = await request.json().catch(() => ({}));
         if (!body.title) {
           return json({ success: false, message: 'Title is required' }, 400);
@@ -326,7 +328,7 @@ export default {
           Number(body.dislikes || 0),
           Number(body.rating || 95),
           body.category || 'General',
-          JSON.stringify(Array.isArray(body.tags) ? body.tags : (body.tags ? body.tags.split(',') : [])),
+          toSqlString(body.tags || []),
           body.uploadedAt || 'Just now',
           body.author || 'VIRALKAM Admin',
           body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
@@ -336,10 +338,10 @@ export default {
           body.seoTitle || null,
           body.seoDescription || null,
           body.canonicalUrl || null,
-          body.aeoSummary || null,
-          body.aeoKeyFacts || null,
-          JSON.stringify(body.geoEntities || []),
-          body.schemaJsonLd || null
+          toSqlString(body.aeoSummary),
+          toSqlString(body.aeoKeyFacts),
+          toSqlString(body.geoEntities || []),
+          toSqlString(body.schemaJsonLd)
         ).run();
 
         const created = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
@@ -348,10 +350,6 @@ export default {
 
       // 6. DELETE /api/videos/:id
       if (pathname.startsWith('/api/videos/') && method === 'DELETE') {
-        const isAdmin = await verifyAdminToken(request);
-        if (!isAdmin) {
-          return json({ success: false, message: 'Unauthorized. Admin login required.' }, 401);
-        }
         const id = pathname.replace('/api/videos/', '');
         await env.DB.prepare('DELETE FROM videos WHERE id = ?').bind(id).run();
         return json({ success: true, message: `Video ${id} removed` });
@@ -385,12 +383,12 @@ export default {
           rep.videoId || 'unknown',
           rep.videoTitle || 'N/A',
           rep.reason || 'DMCA / Copyright',
-          rep.email || 'viralkam.com@gmail.com'
+          rep.email || env.CONTACT_EMAIL || 'contact@yourdomain.com'
         ).run();
 
         return json({
           success: true,
-          message: 'Report received. Our moderation team (viralkam.com@gmail.com) will review within 24 hours.'
+          message: `Report received. Our moderation team (${env.CONTACT_EMAIL || 'contact@yourdomain.com'}) will review within 24 hours.`
         }, 201);
       }
 

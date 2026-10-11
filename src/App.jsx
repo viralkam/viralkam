@@ -5,11 +5,34 @@ import VideoCard from "./components/VideoCard";
 import WatchView from "./components/WatchView";
 import AdminPanel from "./components/AdminPanel";
 import LegalPage from "./components/LegalPage";
+import { VideoSkeletonGrid } from "./components/VideoSkeleton";
 import { INITIAL_VIDEOS, CATEGORIES } from "./mockVideos";
 import { api } from "./services/api";
 
 export default function App() {
-  const [videos, setVideos] = useState(INITIAL_VIDEOS);
+  // Load cached videos immediately on refresh to eliminate any visual flicker
+  const [videos, setVideos] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem("vk_cached_videos");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_VIDEOS;
+  });
+
+  const [isLoading, setIsLoading] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem("vk_cached_videos");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return false;
+      }
+    } catch {}
+    return true;
+  });
+
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("newest"); // "newest" | "popular" | "most_viewed" | "longest" | "random"
@@ -20,7 +43,7 @@ export default function App() {
 
   // Load videos strictly from Cloudflare D1 / Server Database on mount
   React.useEffect(() => {
-    // Completely purge any old legacy localStorage video cache
+    // Purge old legacy custom videos cache
     try {
       localStorage.removeItem("vk_custom_videos");
     } catch {}
@@ -30,9 +53,14 @@ export default function App() {
         const res = await api.getVideos({ limit: 100 });
         if (res && res.videos && res.videos.length > 0) {
           setVideos(res.videos);
+          try {
+            sessionStorage.setItem("vk_cached_videos", JSON.stringify(res.videos));
+          } catch {}
         }
       } catch (e) {
         console.warn("Database sync warning, using initial dataset:", e);
+      } finally {
+        setIsLoading(false);
       }
     }
     loadData();
@@ -328,7 +356,9 @@ export default function App() {
               </div>
             )}
 
-            {paginatedVideos.length > 0 ? (
+            {isLoading ? (
+              <VideoSkeletonGrid count={24} />
+            ) : paginatedVideos.length > 0 ? (
               <div className="tube-video-grid">
                 {paginatedVideos.map((video) => (
                   <VideoCard

@@ -1,4 +1,5 @@
 import React from "react";
+import { CONFIG } from "../config";
 
 export default function LegalPage({ pageType = "dmca", onNavigateHome, onSelectLegalPage }) {
   return (
@@ -28,7 +29,7 @@ export default function LegalPage({ pageType = "dmca", onNavigateHome, onSelectL
             </p>
 
             <p className="legal-mail-highlight">
-              Mail us: <a href="mailto:viralkam.com@gmail.com" className="legal-email-link">viralkam.com@gmail.com</a>
+              Mail us: <a href={`mailto:${CONFIG.CONTACT_EMAIL}`} className="legal-email-link">{CONFIG.CONTACT_EMAIL}</a>
             </p>
           </div>
         </div>
@@ -59,7 +60,7 @@ export default function LegalPage({ pageType = "dmca", onNavigateHome, onSelectL
             </p>
 
             <p className="legal-mail-highlight">
-              Mail us: <a href="mailto:viralkam.com@gmail.com" className="legal-email-link">viralkam.com@gmail.com</a>
+              Mail us: <a href={`mailto:${CONFIG.CONTACT_EMAIL}`} className="legal-email-link">{CONFIG.CONTACT_EMAIL}</a>
             </p>
           </div>
         </div>
@@ -114,7 +115,7 @@ export default function LegalPage({ pageType = "dmca", onNavigateHome, onSelectL
             </p>
 
             <p className="legal-mail-highlight">
-              Mail us: <a href="mailto:viralkam.com@gmail.com" className="legal-email-link">viralkam.com@gmail.com</a>
+              Mail us: <a href={`mailto:${CONFIG.CONTACT_EMAIL}`} className="legal-email-link">{CONFIG.CONTACT_EMAIL}</a>
             </p>
           </div>
         </div>

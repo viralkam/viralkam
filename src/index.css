@@ -454,6 +454,100 @@ body {
   border-radius: 2px;
 }
 
+/* ==================== SKELETON PLACEHOLDER CARDS ==================== */
+.skeleton-block {
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.skeleton-shimmer {
+  position: relative;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    transparent 100%
+  );
+  animation: vk-shimmer 1.5s infinite;
+}
+
+@keyframes vk-shimmer {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+.skeleton-line {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  margin-bottom: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-line::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.12) 50%,
+    transparent 100%
+  );
+  animation: vk-shimmer 1.5s infinite;
+}
+
+.skeleton-title-1 {
+  width: 90%;
+  height: 13px;
+}
+
+.skeleton-title-2 {
+  width: 55%;
+  height: 12px;
+  margin-bottom: 8px;
+}
+
+.skeleton-meta-row {
+  margin-top: auto;
+}
+
+.skeleton-pill {
+  width: 36px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.skeleton-pill-right {
+  margin-left: auto;
+  width: 32px;
+}
+
+.skeleton-duration {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 38px;
+  height: 16px;
+  background: rgba(0, 114, 159, 0.45);
+  border-radius: 3px;
+}
+
 /* Sidebar "See all categories >" link */
 .sidebar-see-all-link {
   display: block;
@@ -556,7 +650,7 @@ body {
 
 /* ==================== 4. WATCH PAGE ==================== */
 .watch-page-wrapper {
-  max-width: 96%;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0.85rem 1rem 2rem;
   width: 100%;
@@ -570,6 +664,8 @@ body {
 
 .player-section {
   width: 100%;
+  max-width: 1020px;
+  margin: 0 auto;
   background: #000;
   border-radius: 4px;
   overflow: hidden;
@@ -579,29 +675,38 @@ body {
 .player-inner {
   width: 100%;
   position: relative;
+  background: #000;
 }
 
 .video-player-wrapper {
   width: 100%;
+  background: #000;
 }
 
-/* Force video & poster to fill the width matching the original site */
+/* Force video & poster to strictly stay in standard 16:9 frame matching original site */
 .video-js {
   width: 100% !important;
-  height: auto !important;
-  aspect-ratio: 16 / 9;
-  background-color: #000;
+  max-width: 100% !important;
+  background-color: #000 !important;
+}
+
+.video-js.vjs-16-9,
+.video-js.vjs-fluid {
+  padding-top: 56.25% !important;
+  height: 0 !important;
 }
 
 .video-js .vjs-tech {
   width: 100% !important;
   height: 100% !important;
-  object-fit: cover !important;
+  object-fit: contain !important;
 }
 
 .video-js .vjs-poster {
-  background-size: cover !important;
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
   background-position: center center !important;
+  background-color: #000 !important;
 }
 
 .video-js .vjs-big-play-button {

@@ -1,8 +1,8 @@
 // Cloudflare Serverless Function: GET /api/admin/verify
 export async function onRequestGet(context) {
   const { request, env } = context;
-  const expectedAdminId = env.ADMIN_EMAIL || 'viralkam.com@gmail.com';
-  const authSecret = env.JWT_SECRET || 'vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026';
+  const expectedAdminId = env.ADMIN_EMAIL || 'admin@yourdomain.com';
+  const authSecret = env.JWT_SECRET || 'random_functions_jwt_secret_key_min_32_chars';
 
   const auth = request.headers.get('Authorization') || '';
   const rawToken = auth.replace(/^Bearer\s+/i, '').trim();

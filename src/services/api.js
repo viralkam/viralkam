@@ -4,8 +4,9 @@
  */
 
 import { INITIAL_VIDEOS, CATEGORIES } from '../mockVideos';
+import { CONFIG } from '../config';
 
-const API_BASE = '/api';
+const API_BASE = CONFIG.API_BASE_URL;
 
 export const api = {
   /**
@@ -133,7 +134,7 @@ export const api = {
     });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.message || `Failed to save to database (HTTP ${res.status})`);
+      throw new Error(errData.message || errData.error || `Failed to save to database (HTTP ${res.status})`);
     }
     const data = await res.json();
     return data.video || videoData;
@@ -213,7 +214,7 @@ export const api = {
   /**
    * Submit Report / Removal Request
    */
-  async submitReport({ videoId, videoTitle, reason, email = 'viralkam.com@gmail.com' }) {
+  async submitReport({ videoId, videoTitle, reason, email = CONFIG.CONTACT_EMAIL }) {
     try {
       const res = await fetch(`${API_BASE}/reports`, {
         method: 'POST',
@@ -224,7 +225,7 @@ export const api = {
     } catch (err) {
       return {
         success: true,
-        message: 'Report received. Our moderation team (viralkam.com@gmail.com) will review within 24 hours.'
+        message: `Report received. Our moderation team (${CONFIG.CONTACT_EMAIL}) will review within 24 hours.`
       };
     }
   }

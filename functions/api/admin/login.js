@@ -1,9 +1,9 @@
 // Cloudflare Serverless Function: POST /api/admin/login
 export async function onRequestPost(context) {
   const { request, env } = context;
-  const expectedAdminId = env.ADMIN_EMAIL || 'viralkam.com@gmail.com';
-  const expectedAdminPass = env.ADMIN_PASS || 'Viralkam.com@gmail.comR85';
-  const authSecret = env.JWT_SECRET || 'vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026';
+  const expectedAdminId = env.ADMIN_EMAIL || 'admin@yourdomain.com';
+  const expectedAdminPass = env.ADMIN_PASS || 'ChangeMeInProduction';
+  const authSecret = env.JWT_SECRET || 'random_functions_jwt_secret_key_min_32_chars';
 
   const body = await request.json().catch(() => ({}));
   const reqId = (body.id || body.email || body.username || '').trim().toLowerCase();
