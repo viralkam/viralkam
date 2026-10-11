@@ -650,9 +650,9 @@ body {
 
 /* ==================== 4. WATCH PAGE ==================== */
 .watch-page-wrapper {
-  max-width: 1200px;
+  max-width: 98%;
   margin: 0 auto;
-  padding: 0.85rem 1rem 2rem;
+  padding: 0.6rem 0.75rem 2rem;
   width: 100%;
 }
 
@@ -664,36 +664,50 @@ body {
 
 .player-section {
   width: 100%;
-  max-width: 1020px;
+  height: clamp(520px, calc(100vh - 120px), 820px);
   margin: 0 auto;
   background: #000;
   border-radius: 4px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  position: relative;
 }
 
 .player-inner {
   width: 100%;
+  height: 100%;
   position: relative;
   background: #000;
 }
 
 .video-player-wrapper {
   width: 100%;
+  height: 100%;
   background: #000;
 }
 
-/* Force video & poster to strictly stay in standard 16:9 frame matching original site */
-.video-js {
-  width: 100% !important;
-  max-width: 100% !important;
-  background-color: #000 !important;
+.video-player-wrapper > div {
+  width: 100%;
+  height: 100%;
 }
 
+/* Force video player to fill theater frame and contain video with black sidebars like Viralkand */
+.video-js {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  background-color: #000 !important;
+  padding-top: 0 !important;
+  position: relative !important;
+}
+
+.video-js.vjs-fill,
 .video-js.vjs-16-9,
 .video-js.vjs-fluid {
-  padding-top: 56.25% !important;
-  height: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding-top: 0 !important;
 }
 
 .video-js .vjs-tech {
@@ -703,10 +717,22 @@ body {
 }
 
 .video-js .vjs-poster {
+  width: 100% !important;
+  height: 100% !important;
   background-size: contain !important;
   background-repeat: no-repeat !important;
   background-position: center center !important;
   background-color: #000 !important;
+}
+
+@media (max-width: 768px) {
+  .watch-page-wrapper {
+    max-width: 100%;
+    padding: 0.5rem 0.5rem 1.5rem;
+  }
+  .player-section {
+    height: clamp(240px, 56.25vw, 420px);
+  }
 }
 
 .video-js .vjs-big-play-button {

@@ -80,8 +80,7 @@ export default function WatchView({
     autoplay: false,
     controls: true,
     responsive: true,
-    fluid: false,
-    aspectRatio: "16:9",
+    fill: true,
     poster: video.thumbnail,
     sources: [
       {
@@ -151,7 +150,7 @@ export default function WatchView({
       <section className="player-section">
         <div className="player-inner">
           {youtubeId ? (
-            <div className="youtube-player-frame-wrap" style={{ position: "relative", paddingBottom: "56.25%", height: 0, overflow: "hidden", borderRadius: "8px", background: "#000" }}>
+            <div className="youtube-player-frame-wrap" style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", background: "#000" }}>
               <iframe
                 src={`https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0`}
                 title={video.title}
@@ -162,7 +161,7 @@ export default function WatchView({
               />
             </div>
           ) : isEmbed ? (
-            <div className="youtube-player-frame-wrap" style={{ position: "relative", paddingBottom: "56.25%", height: 0, overflow: "hidden", borderRadius: "8px", background: "#000" }}>
+            <div className="youtube-player-frame-wrap" style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", background: "#000" }}>
               <iframe
                 src={embedSourceUrl}
                 title={video.title}
