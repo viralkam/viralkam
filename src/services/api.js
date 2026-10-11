@@ -177,6 +177,26 @@ export const api = {
   },
 
   /**
+   * Upload video file directly to Cloudflare R2 object storage
+   */
+  async uploadVideoFile(file) {
+    const res = await fetch(`${API_BASE}/r2/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'video/mp4',
+        'X-File-Name': encodeURIComponent(file.name)
+      },
+      body: file
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `R2 storage upload failed (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return data.url;
+  },
+
+  /**
    * Fetch Categories with counts
    */
   async getCategories() {

@@ -131,11 +131,11 @@ export default function AdminPanel({
       tempVideo.onseeked = () => {
         try {
           const canvas = document.createElement("canvas");
-          canvas.width = Math.min(tempVideo.videoWidth || 640, 1280);
-          canvas.height = Math.min(tempVideo.videoHeight || 360, 720);
+          canvas.width = 480;
+          canvas.height = 270;
           const ctx = canvas.getContext("2d");
           ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
-          const thumbData = canvas.toDataURL("image/jpeg", 0.8);
+          const thumbData = canvas.toDataURL("image/jpeg", 0.65);
           if (thumbData && !thumbnail) {
             setThumbnail(thumbData);
           }
@@ -173,59 +173,75 @@ export default function AdminPanel({
     setPublishError("");
     setIsPublishing(true);
 
-    const rawUrl = videoUrl.trim();
-    // Auto-detect YouTube URL
-    const ytMatch = rawUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
-    const ytId = ytMatch ? ytMatch[1] : null;
-
-    // Auto-generate high-quality thumbnail from YouTube if not specified
-    let finalThumbnail = thumbnail.trim();
-    if (!finalThumbnail && ytId) {
-      finalThumbnail = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
-    } else if (!finalThumbnail) {
-      finalThumbnail = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80";
-    }
-
-    // Automatic SEO, AEO, GEO compilation
-    const seoAeoGeo = generateVideoSEO_AEO_GEO({
-      id: "vid-" + Date.now(),
-      title: title.trim(),
-      description: description.trim(),
-      category: category,
-      tags: tags,
-      duration: duration.trim() || "03:30",
-      thumbnail: finalThumbnail,
-      videoUrl: rawUrl
-    });
-
-    const newVideo = {
-      id: "vid-" + Date.now(),
-      title: title.trim(),
-      description: description.trim() || "Watch full video on VIRALKAM.COM.",
-      duration: duration.trim() || "03:30",
-      views: parseInt(viewsInitial) || 0,
-      likes: Math.round(((parseInt(viewsInitial) || 0) * (ratingInitial / 100)) / 10) || 10,
-      dislikes: 1,
-      rating: parseInt(ratingInitial) || 95,
-      category: category,
-      tags: tags
-        ? tags.split(",").map((t) => t.trim()).filter(Boolean)
-        : [category, "VIRALKAM", "Viral"],
-      uploadedAt: "Just now",
-      author: "Admin",
-      thumbnail: finalThumbnail,
-      videoUrl: rawUrl || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "https://vjs.zencdn.net/v/oceans.mp4"),
-      embedUrl: ytId ? `https://www.youtube.com/embed/${ytId}` : null,
-      seoTitle: seoAeoGeo.seoTitle,
-      seoDescription: seoAeoGeo.seoDescription,
-      canonicalUrl: seoAeoGeo.canonicalUrl,
-      aeoSummary: seoAeoGeo.aeoSummary,
-      aeoKeyFacts: seoAeoGeo.aeoKeyFacts,
-      geoEntities: seoAeoGeo.geoEntities,
-      schemaJsonLd: seoAeoGeo.schemaJsonLd
-    };
-
     try {
+      let finalStreamUrl = videoUrl.trim();
+
+      // If local device video is chosen, upload to Cloudflare R2 storage
+      if (videoSourceType === "file" && videoFile) {
+        try {
+          finalStreamUrl = await api.uploadVideoFile(videoFile);
+        } catch (uploadErr) {
+          throw new Error(
+            "Local device video upload requires Cloudflare R2 storage to be viewable by other users and incognito. Please paste a YouTube link (e.g. https://www.youtube.com/watch?v=...) or direct video URL for instant global streaming!"
+          );
+        }
+      }
+
+      if (!finalStreamUrl) {
+        throw new Error("Please provide a valid video URL or select a file.");
+      }
+
+      // Auto-detect YouTube URL
+      const ytMatch = finalStreamUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+      const ytId = ytMatch ? ytMatch[1] : null;
+
+      // Auto-generate high-quality thumbnail from YouTube if not specified
+      let finalThumbnail = thumbnail.trim();
+      if (!finalThumbnail && ytId) {
+        finalThumbnail = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+      } else if (!finalThumbnail) {
+        finalThumbnail = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80";
+      }
+
+      // Automatic SEO, AEO, GEO compilation
+      const seoAeoGeo = generateVideoSEO_AEO_GEO({
+        id: "vid-" + Date.now(),
+        title: title.trim(),
+        description: description.trim(),
+        category: category,
+        tags: tags,
+        duration: duration.trim() || "03:30",
+        thumbnail: finalThumbnail,
+        videoUrl: finalStreamUrl
+      });
+
+      const newVideo = {
+        id: "vid-" + Date.now(),
+        title: title.trim(),
+        description: description.trim() || "Watch full video on VIRALKAM.COM.",
+        duration: duration.trim() || "03:30",
+        views: parseInt(viewsInitial) || 0,
+        likes: Math.round(((parseInt(viewsInitial) || 0) * (ratingInitial / 100)) / 10) || 10,
+        dislikes: 1,
+        rating: parseInt(ratingInitial) || 95,
+        category: category,
+        tags: tags
+          ? tags.split(",").map((t) => t.trim()).filter(Boolean)
+          : [category, "VIRALKAM", "Viral"],
+        uploadedAt: "Just now",
+        author: "Admin",
+        thumbnail: finalThumbnail,
+        videoUrl: finalStreamUrl || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "https://vjs.zencdn.net/v/oceans.mp4"),
+        embedUrl: ytId ? `https://www.youtube.com/embed/${ytId}` : null,
+        seoTitle: seoAeoGeo.seoTitle,
+        seoDescription: seoAeoGeo.seoDescription,
+        canonicalUrl: seoAeoGeo.canonicalUrl,
+        aeoSummary: seoAeoGeo.aeoSummary,
+        aeoKeyFacts: seoAeoGeo.aeoKeyFacts,
+        geoEntities: seoAeoGeo.geoEntities,
+        schemaJsonLd: seoAeoGeo.schemaJsonLd
+      };
+
       await onAddVideo(newVideo);
       setPublishSuccess(true);
       setTitle("");
@@ -233,6 +249,7 @@ export default function AdminPanel({
       setVideoUrl("");
       setThumbnail("");
       setTags("");
+      setVideoFile(null);
 
       setTimeout(() => {
         setPublishSuccess(false);

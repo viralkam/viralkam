@@ -21,3 +21,8 @@ JWT_SECRET = "vk_secret_key_8348da430a621adc2e77fdb6e3b83243_2026"
 binding = "DB"
 database_name = "viralkam-db"
 database_id = "59a4dfe3-6e6a-4d11-8a80-3defb6cfc77f"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "viralkam-videos"
+

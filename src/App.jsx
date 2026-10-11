@@ -9,19 +9,7 @@ import { INITIAL_VIDEOS, CATEGORIES } from "./mockVideos";
 import { api } from "./services/api";
 
 export default function App() {
-  const getStoredCustomVideos = () => {
-    try {
-      const saved = localStorage.getItem("vk_custom_videos");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  };
-
-  const [videos, setVideos] = useState(() => {
-    const local = getStoredCustomVideos();
-    return local.length > 0 ? local : INITIAL_VIDEOS;
-  });
+  const [videos, setVideos] = useState(INITIAL_VIDEOS);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("newest"); // "newest" | "popular" | "most_viewed" | "longest" | "random"
@@ -30,26 +18,21 @@ export default function App() {
   const [activeLegalPage, setActiveLegalPage] = useState(null); // "dmca" | "compliance" | "terms" | null
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Load videos from backend API on mount
+  // Load videos strictly from Cloudflare D1 / Server Database on mount
   React.useEffect(() => {
+    // Completely purge any old legacy localStorage video cache
+    try {
+      localStorage.removeItem("vk_custom_videos");
+    } catch {}
+
     async function loadData() {
       try {
         const res = await api.getVideos({ limit: 100 });
-        const backendVideos = (res && res.videos) || [];
-        const localVideos = getStoredCustomVideos();
-        
-        // Merge without duplicates
-        const videoMap = new Map();
-        [...localVideos, ...backendVideos].forEach((v) => {
-          if (v && v.id) videoMap.set(v.id, v);
-        });
-
-        const combined = Array.from(videoMap.values());
-        if (combined.length > 0) {
-          setVideos(combined);
+        if (res && res.videos && res.videos.length > 0) {
+          setVideos(res.videos);
         }
       } catch (e) {
-        console.warn("Using local dataset", e);
+        console.warn("Database sync warning, using initial dataset:", e);
       }
     }
     loadData();
@@ -235,42 +218,29 @@ export default function App() {
   };
 
   const handleAddVideo = async (newVideo) => {
-    // 1. Immediately store in localStorage so it is never lost
-    try {
-      const existing = getStoredCustomVideos();
-      const updated = [newVideo, ...existing.filter((v) => v.id !== newVideo.id)];
-      localStorage.setItem("vk_custom_videos", JSON.stringify(updated));
-    } catch (e) {
-      console.warn("Local storage write error:", e);
-    }
+    // 1. Strictly save to Cloudflare D1 / Database Storage
+    // Video is NOT saved in local storage - it goes directly to server database
+    const saved = await api.createVideo(newVideo);
+    const finalVideo = saved || newVideo;
 
-    // 2. Update React state immediately
-    setVideos((prev) => [newVideo, ...prev.filter((v) => v.id !== newVideo.id)]);
+    // 2. Update React state immediately on platform
+    setVideos((prev) => [finalVideo, ...prev.filter((v) => v.id !== finalVideo.id)]);
 
-    // 3. Persist to Cloudflare D1
-    try {
-      const saved = await api.createVideo(newVideo);
-      return saved || newVideo;
-    } catch (e) {
-      console.warn("Backend save notice (video preserved locally):", e);
-      return newVideo;
-    }
+    return finalVideo;
   };
 
   const handleDeleteVideo = async (id) => {
-    try {
-      const existing = getStoredCustomVideos();
-      localStorage.setItem("vk_custom_videos", JSON.stringify(existing.filter((v) => v.id !== id)));
-    } catch {}
-
+    // 1. Remove from React state
     setVideos((prev) => prev.filter((v) => v.id !== id));
     if (selectedVideo && selectedVideo.id === id) {
       setSelectedVideo(null);
     }
+
+    // 2. Delete strictly from Cloudflare D1 Database
     try {
       await api.deleteVideo(id);
     } catch (e) {
-      console.error("Failed to delete from backend:", e);
+      console.error("Failed to delete from database:", e);
     }
   };
 

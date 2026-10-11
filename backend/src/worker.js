@@ -271,6 +271,38 @@ export default {
           return json({ success: false, message: 'Title is required' }, 400);
         }
 
+        // Auto-create table if not exists
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS videos (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            duration TEXT DEFAULT '03:30',
+            views INTEGER DEFAULT 0,
+            likes INTEGER DEFAULT 0,
+            dislikes INTEGER DEFAULT 0,
+            rating INTEGER DEFAULT 95,
+            category TEXT DEFAULT 'General',
+            tags TEXT,
+            uploadedAt TEXT DEFAULT 'Just now',
+            author TEXT DEFAULT 'VIRALKAM Admin',
+            thumbnail TEXT NOT NULL,
+            videoUrl TEXT NOT NULL,
+            hlsUrl TEXT,
+            embedUrl TEXT,
+            seoTitle TEXT,
+            seoDescription TEXT,
+            canonicalUrl TEXT,
+            aeoSummary TEXT,
+            aeoKeyFacts TEXT,
+            geoEntities TEXT,
+            schemaJsonLd TEXT,
+            status TEXT DEFAULT 'published',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+
         const id = body.id || `vid-${Date.now()}`;
         await env.DB.prepare(`
           INSERT INTO videos (
@@ -364,7 +396,15 @@ export default {
 
       // 9. POST /api/r2/upload (Cloudflare R2 Direct Upload & Storage)
       if (pathname === '/api/r2/upload' && method === 'POST') {
-        const filename = request.headers.get('X-File-Name') || `upload-${Date.now()}.mp4`;
+        if (!env.BUCKET) {
+          return json({
+            success: false,
+            message: 'Cloudflare R2 Storage (BUCKET) is not bound. Please bind R2 bucket "viralkam-videos" as BUCKET in wrangler.toml or Cloudflare dashboard.'
+          }, 500);
+        }
+
+        const rawFileName = request.headers.get('X-File-Name') || `upload-${Date.now()}.mp4`;
+        const filename = decodeURIComponent(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_');
         const contentType = request.headers.get('Content-Type') || 'video/mp4';
         const fileKey = `videos/${Date.now()}-${filename}`;
 
@@ -373,12 +413,13 @@ export default {
           httpMetadata: { contentType }
         });
 
-        const publicUrl = `https://vcdn.viralkam.com/${fileKey}`;
+        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkam.com';
+        const publicUrl = `https://${cdnDomain}/${fileKey}`;
         return json({
           success: true,
           key: fileKey,
           url: publicUrl,
-          message: 'Uploaded successfully to Cloudflare R2'
+          message: 'Video file uploaded successfully to Cloudflare R2'
         });
       }
 

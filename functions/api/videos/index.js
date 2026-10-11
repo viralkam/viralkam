@@ -86,7 +86,40 @@ export async function onRequestPost(context) {
       return Response.json({ success: false, message: "Title is required" }, { status: 400 });
     }
 
+    // Auto-create table if not exists
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS videos (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        duration TEXT DEFAULT '03:30',
+        views INTEGER DEFAULT 0,
+        likes INTEGER DEFAULT 0,
+        dislikes INTEGER DEFAULT 0,
+        rating INTEGER DEFAULT 95,
+        category TEXT DEFAULT 'General',
+        tags TEXT,
+        uploadedAt TEXT DEFAULT 'Just now',
+        author TEXT DEFAULT 'VIRALKAM Admin',
+        thumbnail TEXT NOT NULL,
+        videoUrl TEXT NOT NULL,
+        hlsUrl TEXT,
+        embedUrl TEXT,
+        seoTitle TEXT,
+        seoDescription TEXT,
+        canonicalUrl TEXT,
+        aeoSummary TEXT,
+        aeoKeyFacts TEXT,
+        geoEntities TEXT,
+        schemaJsonLd TEXT,
+        status TEXT DEFAULT 'published',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
     const id = body.id || `vid-${Date.now()}`;
+
     await env.DB.prepare(`
       INSERT INTO videos (
         id, title, description, duration, views, likes, dislikes, rating,
