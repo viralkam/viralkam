@@ -424,8 +424,8 @@ export default function AdminPanel({
     refreshHistory();
 
     setIsUploadingSingle(true);
-    setSingleUploadProgress(10);
-    setSingleUploadStep(singleSourceType === "file" ? "Uploading video to Cloudflare R2 / Server storage..." : "Verifying video stream...");
+    setSingleUploadProgress(0);
+    setSingleUploadStep(singleSourceType === "file" ? "Starting upload to server storage..." : "Verifying video stream...");
 
     try {
       let finalVideoUrl = "";
@@ -433,11 +433,10 @@ export default function AdminPanel({
         finalVideoUrl = await api.uploadVideoFile(singleFile, (pct, loaded, total) => {
           const loadedMB = (loaded / (1024 * 1024)).toFixed(1);
           const totalMB = (total / (1024 * 1024)).toFixed(1);
-          const scaledProgress = Math.min(85, Math.round(pct * 0.85));
-          setSingleUploadProgress(scaledProgress);
-          setSingleUploadStep(`Uploading to server storage: ${pct}% (${loadedMB} MB / ${totalMB} MB)...`);
+          setSingleUploadProgress(pct);
+          setSingleUploadStep(`Uploading to server storage (${loadedMB} MB / ${totalMB} MB)...`);
           uploadHistory.updateItem(historyId, {
-            progress: scaledProgress,
+            progress: pct,
             currentStep: `Uploading: ${pct}% (${loadedMB}/${totalMB} MB)`
           });
           refreshHistory();
@@ -2134,13 +2133,20 @@ export default function AdminPanel({
                           <button
                             type="submit"
                             className="vap-btn-primary"
-                            style={{ width: "100%", justifyContent: "center", padding: "12px" }}
+                            style={{
+                              width: "100%",
+                              justifyContent: "center",
+                              padding: "12px",
+                              opacity: isUploadingSingle ? 0.75 : 1,
+                              cursor: isUploadingSingle ? "not-allowed" : "pointer",
+                              background: isUploadingSingle ? "#475569" : undefined
+                            }}
                             disabled={isUploadingSingle}
                           >
                             {isUploadingSingle ? (
                               <>
                                 <Loader2 className="animate-spin" size={18} />
-                                <span>Uploading ({singleUploadProgress}%)...</span>
+                                <span>Uploading in progress, please wait...</span>
                               </>
                             ) : (
                               <span>Upload & Publish Video</span>
