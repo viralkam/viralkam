@@ -245,6 +245,17 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  // Dynamic categories state loaded from backend
+  const [categories, setCategories] = useState(CATEGORIES);
+
+  React.useEffect(() => {
+    api.getCategories().then((cats) => {
+      if (cats && cats.length > 0) {
+        setCategories(cats.map((c) => c.name));
+      }
+    }).catch(() => {});
+  }, []);
+
   const handleAddVideo = async (newVideo) => {
     // 1. Strictly save to Cloudflare D1 / Database Storage
     // Video is NOT saved in local storage - it goes directly to server database
@@ -255,6 +266,14 @@ export default function App() {
     setVideos((prev) => [finalVideo, ...prev.filter((v) => v.id !== finalVideo.id)]);
 
     return finalVideo;
+  };
+
+  const handleUpdateVideo = async (updatedVideo) => {
+    setVideos((prev) => prev.map((v) => (v.id === updatedVideo.id ? updatedVideo : v)));
+    if (selectedVideo && selectedVideo.id === updatedVideo.id) {
+      setSelectedVideo(updatedVideo);
+    }
+    return updatedVideo;
   };
 
   const handleDeleteVideo = async (id) => {
@@ -272,6 +291,20 @@ export default function App() {
     }
   };
 
+  if (isAdminOpen) {
+    return (
+      <AdminPanel
+        videos={videos}
+        categories={categories}
+        onAddVideo={handleAddVideo}
+        onUpdateVideo={handleUpdateVideo}
+        onDeleteVideo={handleDeleteVideo}
+        onExitAdmin={handleNavigateHome}
+        onViewVideo={handleSelectVideo}
+      />
+    );
+  }
+
   return (
     <div className="site-wrapper">
       {/* Top Navbar */}
@@ -281,7 +314,7 @@ export default function App() {
         onNavigateHome={handleNavigateHome}
         onOpenAdmin={handleOpenAdmin}
         isAdminActive={isAdminOpen}
-        categories={CATEGORIES}
+        categories={categories}
         onSelectCategory={handleSelectCategory}
         activeFilter={activeFilter}
         setActiveFilter={(f) => {
@@ -291,19 +324,7 @@ export default function App() {
       />
 
       {/* Main Body Layout */}
-      {isAdminOpen ? (
-        /* Dedicated Admin Page */
-        <main className="admin-page-container">
-          <AdminPanel
-            videos={videos}
-            categories={CATEGORIES}
-            onAddVideo={handleAddVideo}
-            onDeleteVideo={handleDeleteVideo}
-            onExitAdmin={handleNavigateHome}
-            onViewVideo={handleSelectVideo}
-          />
-        </main>
-      ) : activeLegalPage ? (
+      {activeLegalPage ? (
         /* Dedicated Legal Pages (DMCA, 18 U.S.C 2257, Terms of Use) */
         <main className="legal-view-container">
           <LegalPage

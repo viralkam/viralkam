@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS videos (
   geoEntities TEXT,
   schemaJsonLd TEXT,
   status TEXT DEFAULT 'published',
+  privacy TEXT DEFAULT 'public',
+  initial_views INTEGER DEFAULT 0,
+  initial_likes INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

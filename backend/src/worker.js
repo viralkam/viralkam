@@ -137,6 +137,39 @@ export default {
         return json({ success: false, valid: false }, 401);
       }
 
+      // 0.2 GET /api/admin/stats
+      if (pathname === '/api/admin/stats' && method === 'GET') {
+        const totalVideos = (await env.DB.prepare('SELECT COUNT(*) as total FROM videos').first())?.total || 0;
+        const totalViews = (await env.DB.prepare('SELECT COALESCE(SUM(views), 0) as total FROM videos').first())?.total || 0;
+        const totalCategories = (await env.DB.prepare('SELECT COUNT(*) as total FROM categories').first())?.total || 0;
+        
+        const { results: recentRows } = await env.DB.prepare(`
+          SELECT * FROM videos 
+          ORDER BY created_at DESC 
+          LIMIT 6
+        `).all();
+
+        const formattedRecent = (recentRows || []).map(v => {
+          let tags = [];
+          try { tags = typeof v.tags === 'string' ? JSON.parse(v.tags) : (v.tags || []); } catch {}
+          return {
+            ...v,
+            tags,
+            privacy: v.privacy || (v.status === 'private' ? 'private' : 'public')
+          };
+        });
+
+        return json({
+          success: true,
+          stats: {
+            totalVideos,
+            totalViews,
+            totalCategories,
+            recentVideos: formattedRecent
+          }
+        });
+      }
+
       // 1. Health check
       if (pathname === '/api/health') {
         return json({
@@ -153,32 +186,94 @@ export default {
       // 2. GET /api/categories
       if (pathname === '/api/categories' && method === 'GET') {
         const { results } = await env.DB.prepare(`
-          SELECT category, COUNT(*) as count 
-          FROM videos 
-          GROUP BY category 
-          ORDER BY count DESC
+          SELECT c.id, c.name, c.slug, COUNT(v.id) as count 
+          FROM categories c 
+          LEFT JOIN videos v ON LOWER(v.category) = LOWER(c.name) 
+          GROUP BY c.id, c.name, c.slug 
+          ORDER BY c.name ASC
         `).all();
 
         return json({
           success: true,
-          categories: results.map(r => ({ name: r.category, count: r.count }))
+          categories: (results || []).map(r => ({ id: r.id, name: r.name, slug: r.slug, count: r.count }))
         });
       }
 
-      // 3. GET /api/videos (with search, category, sorting, pagination)
+      // 2.1 POST /api/categories
+      if (pathname === '/api/categories' && method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const name = (body.name || '').trim();
+        if (!name) return json({ success: false, message: 'Category name is required' }, 400);
+        const slug = (body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+        
+        try {
+          const res = await env.DB.prepare('INSERT INTO categories (name, slug) VALUES (?, ?)').bind(name, slug).run();
+          return json({
+            success: true,
+            category: { id: res.meta?.last_row_id || Date.now(), name, slug, count: 0 },
+            message: 'Category created'
+          }, 201);
+        } catch {
+          return json({ success: false, message: 'Category already exists' }, 400);
+        }
+      }
+
+      // 2.2 PUT /api/categories/:id
+      if (pathname.startsWith('/api/categories/') && method === 'PUT') {
+        const id = parseInt(pathname.replace('/api/categories/', ''), 10);
+        const body = await request.json().catch(() => ({}));
+        const newName = (body.name || '').trim();
+        if (!newName) return json({ success: false, message: 'Category name is required' }, 400);
+
+        const existing = await env.DB.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first();
+        if (!existing) return json({ success: false, message: 'Category not found' }, 404);
+
+        const slug = (body.slug || newName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+        await env.DB.prepare('UPDATE categories SET name = ?, slug = ? WHERE id = ?').bind(newName, slug, id).run();
+        await env.DB.prepare('UPDATE videos SET category = ? WHERE LOWER(category) = LOWER(?)').bind(newName, existing.name).run();
+
+        return json({ success: true, category: { id, name: newName, slug } });
+      }
+
+      // 2.3 DELETE /api/categories/:id
+      if (pathname.startsWith('/api/categories/') && method === 'DELETE') {
+        const id = parseInt(pathname.replace('/api/categories/', ''), 10);
+        const existing = await env.DB.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first();
+        if (!existing) return json({ success: false, message: 'Category not found' }, 404);
+
+        // Ensure General exists and reassign
+        await env.DB.prepare('INSERT OR IGNORE INTO categories (name, slug) VALUES (?, ?)').bind('General', 'general').run();
+        await env.DB.prepare("UPDATE videos SET category = 'General' WHERE LOWER(category) = LOWER(?)").bind(existing.name).run();
+        await env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run();
+
+        return json({ success: true, message: `Category ${existing.name} removed and videos reassigned to General` });
+      }
+
+      // 3. GET /api/videos (with search, category, privacy, sorting, pagination)
       if (pathname === '/api/videos' && method === 'GET') {
         const params = url.searchParams;
-        // Anti-LPDos & Resource Exhaustion: strictly clamp page and limit bounds
         const page = Math.max(1, parseInt(params.get('page')) || 1);
         const rawLimit = parseInt(params.get('limit')) || 24;
         const limit = Math.min(Math.max(1, rawLimit), 100);
         const offset = (page - 1) * limit;
         const search = (params.get('search') || params.get('q') || '').trim().slice(0, 100);
         const category = (params.get('category') || '').trim().slice(0, 50);
+        const statusFilter = (params.get('status') || params.get('privacy') || '').trim().toLowerCase();
         const sort = params.get('sort') || 'newest';
+
+        const isAdmin = await verifyAdminToken(request);
 
         let conditions = [];
         let bindings = [];
+
+        // Privacy backend enforcement
+        if (!isAdmin) {
+          conditions.push("(privacy != 'private' AND status != 'private')");
+        } else if (statusFilter === 'public') {
+          conditions.push("(privacy != 'private' AND status != 'private')");
+        } else if (statusFilter === 'private') {
+          conditions.push("(privacy = 'private' OR status = 'private')");
+        }
 
         if (search) {
           conditions.push('(title LIKE ? OR description LIKE ? OR tags LIKE ?)');
@@ -186,7 +281,7 @@ export default {
           bindings.push(qParam, qParam, qParam);
         }
 
-        if (category) {
+        if (category && category.toLowerCase() !== 'all' && category.toLowerCase() !== 'all categories') {
           conditions.push('LOWER(category) = LOWER(?)');
           bindings.push(category);
         }
@@ -196,6 +291,7 @@ export default {
         let orderBy = 'ORDER BY created_at DESC';
         if (sort === 'popular') orderBy = 'ORDER BY likes DESC';
         else if (sort === 'most_viewed') orderBy = 'ORDER BY views DESC';
+        else if (sort === 'longest') orderBy = 'ORDER BY duration DESC';
         else if (sort === 'random') orderBy = 'ORDER BY RANDOM()';
 
         // Count total
@@ -216,10 +312,15 @@ export default {
           try { tags = typeof v.tags === 'string' ? JSON.parse(v.tags) : (v.tags || []); } catch {}
           let geo = [];
           try { geo = typeof v.geoEntities === 'string' ? JSON.parse(v.geoEntities) : (v.geoEntities || []); } catch {}
+          const privacy = v.privacy || (v.status === 'private' ? 'private' : 'public');
           return {
             ...v,
             tags,
-            geoEntities: geo
+            geoEntities: geo,
+            privacy,
+            status: v.status || (privacy === 'private' ? 'private' : 'published'),
+            initial_views: Number(v.initial_views || 0),
+            initial_likes: Number(v.initial_likes || 0)
           };
         });
 
@@ -235,16 +336,38 @@ export default {
         });
       }
 
+      // 3.1 POST /api/videos/bulk-delete
+      if (pathname === '/api/videos/bulk-delete' && method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids : [];
+        if (ids.length === 0) return json({ success: false, message: 'No IDs provided' }, 400);
+
+        for (const id of ids) {
+          await env.DB.prepare('DELETE FROM videos WHERE id = ?').bind(id).run();
+        }
+
+        return json({ success: true, message: `Deleted ${ids.length} videos` });
+      }
+
       // 4. GET /api/videos/:id (fetch + increment view count)
       if (pathname.startsWith('/api/videos/') && method === 'GET' && !pathname.endsWith('/vote')) {
         const id = pathname.replace('/api/videos/', '');
-
-        // Increment views atomically
-        await env.DB.prepare('UPDATE videos SET views = views + 1 WHERE id = ?').bind(id).run();
-
         const video = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
         if (!video) {
           return json({ success: false, message: 'Video not found' }, 404);
+        }
+
+        const isPrivate = video.privacy === 'private' || video.status === 'private';
+        const isAdmin = await verifyAdminToken(request);
+
+        if (isPrivate && !isAdmin) {
+          return json({ success: false, message: 'This video is private. Access restricted.' }, 403);
+        }
+
+        // Increment views atomically for visitors
+        if (!isAdmin) {
+          await env.DB.prepare('UPDATE videos SET views = views + 1 WHERE id = ?').bind(id).run();
+          video.views = (video.views || 0) + 1;
         }
 
         let tags = [];
@@ -254,9 +377,65 @@ export default {
           success: true,
           video: {
             ...video,
-            tags
+            tags,
+            privacy: video.privacy || (video.status === 'private' ? 'private' : 'public')
           }
         });
+      }
+
+      // 4.1 PUT /api/videos/:id - update video
+      if (pathname.startsWith('/api/videos/') && method === 'PUT') {
+        const id = pathname.replace('/api/videos/', '');
+        const existing = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
+        if (!existing) {
+          return json({ success: false, message: 'Video not found' }, 404);
+        }
+
+        const body = await request.json().catch(() => ({}));
+        const privacy = (body.privacy || (body.status === 'private' ? 'private' : (existing.privacy || 'public'))).toLowerCase();
+        const status = privacy === 'private' ? 'private' : 'published';
+
+        const toSqlString = (val) => {
+          if (val === null || val === undefined) return null;
+          if (typeof val === 'object') return JSON.stringify(val);
+          return String(val);
+        };
+
+        const initialViews = body.initial_views !== undefined ? Number(body.initial_views) : (body.initialViews !== undefined ? Number(body.initialViews) : Number(existing.initial_views || 0));
+        const initialLikes = body.initial_likes !== undefined ? Number(body.initial_likes) : (body.initialLikes !== undefined ? Number(body.initialLikes) : Number(existing.initial_likes || 0));
+
+        await env.DB.prepare(`
+          UPDATE videos SET
+            title = ?,
+            description = ?,
+            duration = ?,
+            category = ?,
+            tags = ?,
+            thumbnail = ?,
+            videoUrl = ?,
+            privacy = ?,
+            status = ?,
+            initial_views = ?,
+            initial_likes = ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(
+          body.title !== undefined ? body.title : existing.title,
+          body.description !== undefined ? body.description : existing.description,
+          body.duration !== undefined ? body.duration : existing.duration,
+          body.category !== undefined ? body.category : existing.category,
+          toSqlString(body.tags !== undefined ? body.tags : existing.tags),
+          body.thumbnail !== undefined ? body.thumbnail : existing.thumbnail,
+          body.videoUrl !== undefined ? body.videoUrl : existing.videoUrl,
+          privacy,
+          status,
+          initialViews,
+          initialLikes,
+          id
+        ).run();
+
+        const updated = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
+        return json({ success: true, message: 'Video updated', video: updated });
       }
 
       // Helper to serialize any object/array to string for SQLite/D1
@@ -273,7 +452,7 @@ export default {
           return json({ success: false, message: 'Title is required' }, 400);
         }
 
-        // Auto-create table if not exists
+        // Auto-create table if not exists with all columns
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS videos (
             id TEXT PRIMARY KEY,
@@ -300,22 +479,32 @@ export default {
             geoEntities TEXT,
             schemaJsonLd TEXT,
             status TEXT DEFAULT 'published',
+            privacy TEXT DEFAULT 'public',
+            initial_views INTEGER DEFAULT 0,
+            initial_likes INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
           )
         `).run();
 
-        const id = body.id || `vid-${Date.now()}`;
+        const id = body.id || `vid-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const privacy = (body.privacy || (body.status === 'private' ? 'private' : 'public')).toLowerCase();
+        const status = privacy === 'private' ? 'private' : 'published';
+        const initialViews = Number(body.initial_views ?? body.initialViews ?? 0);
+        const initialLikes = Number(body.initial_likes ?? body.initialLikes ?? 0);
+
         await env.DB.prepare(`
           INSERT INTO videos (
             id, title, description, duration, views, likes, dislikes, rating,
             category, tags, uploadedAt, author, thumbnail, videoUrl,
             hlsUrl, embedUrl, seoTitle, seoDescription, canonicalUrl,
-            aeoSummary, aeoKeyFacts, geoEntities, schemaJsonLd
+            aeoSummary, aeoKeyFacts, geoEntities, schemaJsonLd,
+            status, privacy, initial_views, initial_likes
           ) VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
             ?, ?, ?, ?
           )
         `).bind(
@@ -323,8 +512,8 @@ export default {
           body.title,
           body.description || 'Watch video on VIRALKAM.COM',
           body.duration || '03:30',
-          Number(body.views || 0),
-          Number(body.likes || 10),
+          initialViews,
+          initialLikes,
           Number(body.dislikes || 0),
           Number(body.rating || 95),
           body.category || 'General',
@@ -341,7 +530,11 @@ export default {
           toSqlString(body.aeoSummary),
           toSqlString(body.aeoKeyFacts),
           toSqlString(body.geoEntities || []),
-          toSqlString(body.schemaJsonLd)
+          toSqlString(body.schemaJsonLd),
+          status,
+          privacy,
+          initialViews,
+          initialLikes
         ).run();
 
         const created = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
