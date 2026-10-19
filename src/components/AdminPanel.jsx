@@ -94,8 +94,10 @@ export default function AdminPanel({
   // Upload Video Tab: 1=single, 2=bulk, 3=link, 4=excel
   const [uploadTab, setUploadTab] = useState("single");
 
-  // Single Upload Form State
+  // Single Upload Form State (supports both local file upload & direct CDN link)
+  const [singleSourceType, setSingleSourceType] = useState("file"); // "file" | "link"
   const [singleFile, setSingleFile] = useState(null);
+  const [singleVideoUrl, setSingleVideoUrl] = useState("");
   const [singleTitle, setSingleTitle] = useState("");
   const [singleDescription, setSingleDescription] = useState("");
   const [singleCategory, setSingleCategory] = useState("General");
@@ -103,7 +105,8 @@ export default function AdminPanel({
   const [singleTagInput, setSingleTagInput] = useState("");
   const [singleThumbnail, setSingleThumbnail] = useState("");
   const [singleThumbnailFile, setSingleThumbnailFile] = useState(null);
-  const [singleDuration, setSingleDuration] = useState("03:30");
+  const [singleThumbnailUrl, setSingleThumbnailUrl] = useState("");
+  const [singleDuration, setSingleDuration] = useState("");
   const [singleInitialViews, setSingleInitialViews] = useState("");
   const [singleInitialLikes, setSingleInitialLikes] = useState("");
   const [singlePrivacy, setSinglePrivacy] = useState("public");
@@ -116,7 +119,7 @@ export default function AdminPanel({
   const [bulkOverallProgress, setBulkOverallProgress] = useState(0);
   const [isUploadingBulk, setIsUploadingBulk] = useState(false);
 
-  // Link Upload Form State
+  // Link Upload Form State (Direct CDN/External link - no duplicate storage)
   const [linkUrl, setLinkUrl] = useState("");
   const [linkTitle, setLinkTitle] = useState("");
   const [linkDescription, setLinkDescription] = useState("");
@@ -124,7 +127,7 @@ export default function AdminPanel({
   const [linkTags, setLinkTags] = useState([]);
   const [linkTagInput, setLinkTagInput] = useState("");
   const [linkThumbnail, setLinkThumbnail] = useState("");
-  const [linkDuration, setLinkDuration] = useState("03:30");
+  const [linkDuration, setLinkDuration] = useState("");
   const [linkInitialViews, setLinkInitialViews] = useState("");
   const [linkInitialLikes, setLinkInitialLikes] = useState("");
   const [linkPrivacy, setLinkPrivacy] = useState("public");
@@ -206,26 +209,64 @@ export default function AdminPanel({
     loadVideos();
   };
 
-  // Auto Duration & Thumbnail frame helper
-  const detectVideoMeta = (file) => {
+  // Auto Duration & Thumbnail frame helper (supports both File object and video URL string)
+  const detectVideoMeta = (input) => {
     return new Promise((resolve) => {
       try {
-        const url = URL.createObjectURL(file);
+        let url = "";
+        let isObjectUrl = false;
+        if (typeof input === "string") {
+          url = input.trim();
+        } else if (input instanceof Blob || input instanceof File) {
+          url = URL.createObjectURL(input);
+          isObjectUrl = true;
+        } else {
+          return resolve({ duration: "", thumbnail: "" });
+        }
+
+        if (!url) return resolve({ duration: "", thumbnail: "" });
+
         const video = document.createElement("video");
         video.preload = "metadata";
+        video.crossOrigin = "anonymous";
         video.src = url;
 
-        video.onloadedmetadata = () => {
-          const sec = Math.floor(video.duration) || 0;
-          const mins = Math.floor(sec / 60);
-          const remSec = sec % 60;
-          const formattedDuration = `${String(mins).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
+        const cleanup = () => {
+          if (isObjectUrl) {
+            try { URL.revokeObjectURL(url); } catch {}
+          }
+        };
 
-          // Seek to capture frame thumbnail
-          video.currentTime = Math.min(1.5, Math.max(0.5, video.duration / 4));
+        const formatSecs = (totalSec) => {
+          const sec = Math.floor(totalSec) || 0;
+          if (sec <= 0) return "";
+          const hrs = Math.floor(sec / 3600);
+          const mins = Math.floor((sec % 3600) / 60);
+          const remSec = sec % 60;
+          if (hrs > 0) {
+            return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
+          }
+          return `${String(mins).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
+        };
+
+        const timeout = setTimeout(() => {
+          cleanup();
+          resolve({ duration: "", thumbnail: "" });
+        }, 8000);
+
+        video.onloadedmetadata = () => {
+          const durStr = formatSecs(video.duration);
+          try {
+            video.currentTime = Math.min(2.0, Math.max(0.5, video.duration / 4));
+          } catch {
+            clearTimeout(timeout);
+            cleanup();
+            resolve({ duration: durStr, thumbnail: "" });
+          }
         };
 
         video.onseeked = () => {
+          clearTimeout(timeout);
           let thumbData = "";
           try {
             const canvas = document.createElement("canvas");
@@ -236,21 +277,18 @@ export default function AdminPanel({
             thumbData = canvas.toDataURL("image/jpeg", 0.7);
           } catch {}
 
-          const sec = Math.floor(video.duration) || 0;
-          const mins = Math.floor(sec / 60);
-          const remSec = sec % 60;
-          const formattedDuration = `${String(mins).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
-
-          URL.revokeObjectURL(url);
-          resolve({ duration: formattedDuration, thumbnail: thumbData });
+          const durStr = formatSecs(video.duration);
+          cleanup();
+          resolve({ duration: durStr, thumbnail: thumbData });
         };
 
         video.onerror = () => {
-          URL.revokeObjectURL(url);
-          resolve({ duration: "03:30", thumbnail: "" });
+          clearTimeout(timeout);
+          cleanup();
+          resolve({ duration: "", thumbnail: "" });
         };
       } catch {
-        resolve({ duration: "03:30", thumbnail: "" });
+        resolve({ duration: "", thumbnail: "" });
       }
     });
   };
@@ -271,7 +309,47 @@ export default function AdminPanel({
     // Auto-detect duration and thumbnail frame
     const meta = await detectVideoMeta(file);
     if (meta.duration) setSingleDuration(meta.duration);
-    if (meta.thumbnail && !singleThumbnail) setSingleThumbnail(meta.thumbnail);
+    if (meta.thumbnail && !singleThumbnail && !singleThumbnailUrl) {
+      setSingleThumbnail(meta.thumbnail);
+    }
+  };
+
+  const handleSingleVideoUrlChange = (val) => {
+    let clean = (val || "").trim();
+    const iframeMatch = clean.match(/src=["']([^"']+)["']/i);
+    if (iframeMatch && iframeMatch[1]) {
+      clean = iframeMatch[1];
+    }
+    setSingleVideoUrl(clean);
+
+    // Auto extract YouTube ID and thumbnail
+    const ytMatch = clean.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+    if (ytMatch && ytMatch[1]) {
+      const ytId = ytMatch[1];
+      if (!singleThumbnail && !singleThumbnailUrl) {
+        setSingleThumbnail(`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`);
+      }
+    }
+
+    // Auto suggest clean title from URL if title is empty
+    if (!singleTitle && clean) {
+      const suggested = cleanDisplayTitle(clean);
+      if (suggested && suggested !== "Untitled Video") {
+        setSingleTitle(suggested);
+      }
+    }
+
+    // Auto detect duration and thumbnail frame from direct video link
+    if (clean && (clean.startsWith("http://") || clean.startsWith("https://"))) {
+      detectVideoMeta(clean).then((meta) => {
+        if (meta.duration) {
+          setSingleDuration(meta.duration);
+        }
+        if (meta.thumbnail && !singleThumbnail && !singleThumbnailUrl) {
+          setSingleThumbnail(meta.thumbnail);
+        }
+      });
+    }
   };
 
   const handleAddSingleTag = () => {
@@ -292,25 +370,36 @@ export default function AdminPanel({
       showError("Please enter a video title.");
       return;
     }
-    if (!singleFile && !singleThumbnail) {
-      showError("Please select a video file to upload.");
+
+    if (singleSourceType === "file" && !singleFile) {
+      showError("Please select a video file from your device.");
+      return;
+    }
+
+    if (singleSourceType === "link" && !singleVideoUrl.trim()) {
+      showError("Please enter a direct video URL.");
       return;
     }
 
     setIsUploadingSingle(true);
     try {
       let finalVideoUrl = "";
-      if (singleFile) {
+      if (singleSourceType === "file") {
+        // Upload file to user's server storage / Cloudflare R2
         finalVideoUrl = await api.uploadVideoFile(singleFile);
+      } else {
+        // Direct CDN / external link - runs directly without duplicating to server storage
+        finalVideoUrl = cleanVideoUrl(singleVideoUrl.trim());
       }
 
-      let finalThumbnailUrl = singleThumbnail;
+      let finalThumbnailUrl = singleThumbnailUrl.trim() || singleThumbnail;
       if (singleThumbnailFile) {
+        // Upload custom image to user's server storage
         finalThumbnailUrl = await api.uploadVideoFile(singleThumbnailFile);
       }
 
       if (!finalThumbnailUrl) {
-        finalThumbnailUrl = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80";
+        finalThumbnailUrl = FALLBACK_THUMBNAIL;
       }
 
       const initialViewsNum = parseInt(singleInitialViews, 10) || 0;
@@ -321,7 +410,7 @@ export default function AdminPanel({
         description: singleDescription.trim() || `Watch ${singleTitle.trim()} on platform`,
         category: singleCategory || "General",
         tags: singleTags.length > 0 ? singleTags : [singleCategory, "Trending"],
-        duration: singleDuration || "03:30",
+        duration: singleDuration.trim() || "",
         videoUrl: finalVideoUrl,
         thumbnail: finalThumbnailUrl,
         privacy: singlePrivacy,
@@ -337,18 +426,20 @@ export default function AdminPanel({
       const saved = await api.createVideo(newVideo);
       if (onAddVideo) onAddVideo(saved || newVideo);
 
-      showSuccess(`Video "${singleTitle}" uploaded and published successfully!`);
+      showSuccess(`Video "${singleTitle}" saved and published successfully!`);
 
       // Reset single upload form
       setSingleFile(null);
+      setSingleVideoUrl("");
       setSingleTitle("");
       setSingleDescription("");
       setSingleTags([]);
       setSingleThumbnail("");
       setSingleThumbnailFile(null);
+      setSingleThumbnailUrl("");
       setSingleInitialViews("");
       setSingleInitialLikes("");
-      setSingleDuration("03:30");
+      setSingleDuration("");
       setSinglePrivacy("public");
 
       // Reload stats & videos, navigate to videos tab
@@ -379,7 +470,7 @@ export default function AdminPanel({
         title: cleanTitle,
         category: bulkDefaultCategory || "General",
         privacy: bulkDefaultPrivacy || "public",
-        duration: "03:30",
+        duration: "",
         thumbnail: "",
         status: "pending", // "pending" | "uploading" | "success" | "error"
         progress: 0,
@@ -395,7 +486,7 @@ export default function AdminPanel({
         setBulkFiles((prev) =>
           prev.map((it) =>
             it.id === item.id
-              ? { ...it, duration: meta.duration || "03:30", thumbnail: meta.thumbnail || "" }
+              ? { ...it, duration: meta.duration || "", thumbnail: meta.thumbnail || "" }
               : it
           )
         );
@@ -436,9 +527,9 @@ export default function AdminPanel({
           description: `Watch ${item.title} on platform`,
           category: item.category,
           tags: [item.category, "Bulk Upload"],
-          duration: item.duration || "03:30",
+          duration: item.duration || "",
           videoUrl: fileUrl,
-          thumbnail: item.thumbnail || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
+          thumbnail: item.thumbnail || FALLBACK_THUMBNAIL,
           privacy: item.privacy,
           status: item.privacy === "private" ? "private" : "published",
           initial_views: 0,
@@ -502,6 +593,18 @@ export default function AdminPanel({
         setLinkTitle(suggested);
       }
     }
+
+    // Auto detect duration and thumbnail frame from direct video link
+    if (clean && (clean.startsWith("http://") || clean.startsWith("https://"))) {
+      detectVideoMeta(clean).then((meta) => {
+        if (meta.duration) {
+          setLinkDuration(meta.duration);
+        }
+        if (meta.thumbnail && !linkThumbnail) {
+          setLinkThumbnail(meta.thumbnail);
+        }
+      });
+    }
   };
 
   const handleAddLinkTag = () => {
@@ -545,7 +648,7 @@ export default function AdminPanel({
         description: linkDescription.trim() || `Watch ${finalCleanTitle} online.`,
         category: linkCategory || "General",
         tags: linkTags.length > 0 ? linkTags : [linkCategory, "Trending"],
-        duration: linkDuration || "03:30",
+        duration: linkDuration.trim() || "",
         videoUrl: finalCleanUrl,
         thumbnail: linkThumbnail.trim() || FALLBACK_THUMBNAIL,
         privacy: linkPrivacy,
@@ -571,6 +674,7 @@ export default function AdminPanel({
       setLinkTags([]);
       setLinkInitialViews("");
       setLinkInitialLikes("");
+      setLinkDuration("");
       setLinkPrivacy("public");
 
       loadStatsAndCategories();
@@ -663,10 +767,11 @@ export default function AdminPanel({
           const category = findVal(["Category", "Cat"]) || "General";
           const tagsStr = findVal(["Tags", "Tag", "Keywords"]);
           let videoUrl = findVal(["Video URL", "VideoUrl", "URL", "Link"]);
-          const duration = findVal(["Duration", "Time", "Length"]) || "03:30";
+          const duration = findVal(["Duration", "Time", "Length"]) || "";
           const initialViews = findVal(["Initial Views", "Views", "InitialViews"]);
           const initialLikes = findVal(["Initial Likes", "Likes", "InitialLikes"]);
           const privacyRaw = findVal(["Privacy", "Status", "Visibility"]) || "Public";
+          const thumbnailRaw = findVal(["Thumbnail", "Thumbnail URL", "Thumb", "Poster", "Image"]);
 
           // Auto-heal path mismatch if user placed URL in Title column or Title is a file path
           if (title && (title.startsWith("http://") || title.startsWith("https://"))) {
@@ -699,7 +804,8 @@ export default function AdminPanel({
             category,
             tags,
             videoUrl: videoUrl || "https://vjs.zencdn.net/v/oceans.mp4",
-            duration,
+            thumbnail: thumbnailRaw || FALLBACK_THUMBNAIL,
+            duration: duration || "",
             initialViews: parseInt(initialViews, 10) || 0,
             initialLikes: parseInt(initialLikes, 10) || 0,
             privacy: privacyClean,
@@ -741,9 +847,9 @@ export default function AdminPanel({
           description: row.description || `Watch ${row.title} on platform.`,
           category: row.category,
           tags: row.tags,
-          duration: row.duration,
+          duration: row.duration || "",
           videoUrl: row.videoUrl,
-          thumbnail: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
+          thumbnail: row.thumbnail || FALLBACK_THUMBNAIL,
           privacy: row.privacy,
           status: row.privacy === "private" ? "private" : "published",
           initial_views: row.initialViews,
@@ -1098,7 +1204,7 @@ export default function AdminPanel({
                                   alt={cleanDisplayTitle(vid.title)} 
                                   onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
                                 />
-                                <span className="vap-duration-badge">{vid.duration || "03:30"}</span>
+                                {vid.duration && <span className="vap-duration-badge">{vid.duration}</span>}
                               </div>
                             </td>
                             <td>
@@ -1271,7 +1377,7 @@ export default function AdminPanel({
                                     alt={cleanDisplayTitle(vid.title)} 
                                     onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
                                   />
-                                  <span className="vap-duration-badge">{vid.duration || "03:30"}</span>
+                                  {vid.duration && <span className="vap-duration-badge">{vid.duration}</span>}
                                 </div>
                               </td>
                               <td>
@@ -1290,7 +1396,7 @@ export default function AdminPanel({
                               <td>
                                 <span className="vap-cat-pill">{vid.category || "General"}</span>
                               </td>
-                              <td>{vid.duration || "03:30"}</td>
+                              <td>{vid.duration || "-"}</td>
                               <td>{(vid.views || 0).toLocaleString()}</td>
                               <td>{(vid.likes || 0).toLocaleString()}</td>
                               <td>
@@ -1401,10 +1507,6 @@ export default function AdminPanel({
               ======================================================== */}
           {activeNav === "upload" && (
             <div>
-              <div className="vap-page-header">
-                <h2 className="vap-page-title">Upload Video</h2>
-              </div>
-
               {/* Four Tabs in exact required order */}
               <div className="vap-upload-tabs">
                 <button
@@ -1449,60 +1551,103 @@ export default function AdminPanel({
                 <div className="vap-card">
                   <form onSubmit={handleSingleUploadSubmit}>
                     <div className="vap-two-col-layout">
-                      {/* Left Column: Video file & Thumbnail */}
+                      {/* Left Column: Video file / Video Link & Thumbnail */}
                       <div>
-                        <div className="vap-form-group">
-                          <label>Video File (from local device) <span className="required">*</span></label>
-                          <input
-                            type="file"
-                            ref={singleVideoInputRef}
-                            accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
-                            style={{ display: "none" }}
-                            onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
-                          />
-
-                          <div
-                            className="vap-dropzone"
-                            onClick={() => singleVideoInputRef.current?.click()}
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              if (e.dataTransfer.files?.[0]) {
-                                handleSingleFileSelect(e.dataTransfer.files[0]);
-                              }
-                            }}
+                        {/* Source Type Toggle */}
+                        <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+                          <button
+                            type="button"
+                            className={`vap-btn-${singleSourceType === "file" ? "primary" : "secondary"}`}
+                            style={{ flex: 1, justifyContent: "center", fontSize: "0.83rem", padding: "8px 10px" }}
+                            onClick={() => setSingleSourceType("file")}
                           >
-                            <div className="vap-dropzone-icon">
-                              <UploadCloud size={28} />
-                            </div>
-                            <div className="vap-dropzone-prompt">
-                              {singleFile ? singleFile.name : "Drag & drop video file here"}
-                            </div>
-                            <span className="vap-dropzone-sub">or</span>
-                            <button
-                              type="button"
-                              className="vap-btn-primary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                singleVideoInputRef.current?.click();
+                            <UploadCloud size={16} />
+                            <span>Upload File (Server Storage)</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`vap-btn-${singleSourceType === "link" ? "primary" : "secondary"}`}
+                            style={{ flex: 1, justifyContent: "center", fontSize: "0.83rem", padding: "8px 10px" }}
+                            onClick={() => setSingleSourceType("link")}
+                          >
+                            <LinkIcon size={16} />
+                            <span>Direct Video Link (No Duplicate)</span>
+                          </button>
+                        </div>
+
+                        {singleSourceType === "file" ? (
+                          <div className="vap-form-group">
+                            <label>Video File (from local device) <span className="required">*</span></label>
+                            <input
+                              type="file"
+                              ref={singleVideoInputRef}
+                              accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
+                              style={{ display: "none" }}
+                              onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
+                            />
+
+                            <div
+                              className="vap-dropzone"
+                              onClick={() => singleVideoInputRef.current?.click()}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                if (e.dataTransfer.files?.[0]) {
+                                  handleSingleFileSelect(e.dataTransfer.files[0]);
+                                }
                               }}
                             >
-                              Choose File
-                            </button>
-                            <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>
-                              Supported formats: MP4, MOV, AVI, MKV, WEBM (Max: 2 GB)
+                              <div className="vap-dropzone-icon">
+                                <UploadCloud size={28} />
+                              </div>
+                              <div className="vap-dropzone-prompt">
+                                {singleFile ? singleFile.name : "Drag & drop video file here"}
+                              </div>
+                              <span className="vap-dropzone-sub">or</span>
+                              <button
+                                type="button"
+                                className="vap-btn-primary"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  singleVideoInputRef.current?.click();
+                                }}
+                              >
+                                Choose File
+                              </button>
+                              <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>
+                                Supported formats: MP4, MOV, AVI, MKV, WEBM (Max: 2 GB)
+                              </span>
+                              {singleFile && (
+                                <span style={{ color: "#16a34a", fontSize: "0.85rem", fontWeight: 600 }}>
+                                  ✓ Selected: {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {singleDuration ? `| Duration: ${singleDuration}` : ""}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="vap-form-group">
+                            <label>Direct Video URL (CDN / MP4 / Stream / YouTube) <span className="required">*</span></label>
+                            <input
+                              type="url"
+                              className="vap-input"
+                              placeholder="https://cdn.example.com/video.mp4 or YouTube link"
+                              value={singleVideoUrl}
+                              onChange={(e) => handleSingleVideoUrlChange(e.target.value)}
+                            />
+                            <span style={{ fontSize: "0.8rem", color: "#2563eb", marginTop: "5px", display: "block" }}>
+                              ⚡ Video will stream directly via this link. No duplicate file will be uploaded to your server storage.
                             </span>
-                            {singleFile && (
-                              <span style={{ color: "#16a34a", fontSize: "0.85rem", fontWeight: 600 }}>
-                                ✓ Selected: {(singleFile.size / (1024 * 1024)).toFixed(1)} MB | Auto-detected: {singleDuration}
+                            {singleDuration && (
+                              <span style={{ color: "#16a34a", fontSize: "0.82rem", fontWeight: 600, display: "block", marginTop: "4px" }}>
+                                ✓ Auto-detected video duration: {singleDuration}
                               </span>
                             )}
                           </div>
-                        </div>
+                        )}
 
-                        {/* Thumbnail picker */}
+                        {/* Thumbnail picker & Link */}
                         <div className="vap-form-group">
-                          <label>Thumbnail (optional)</label>
+                          <label>Thumbnail (Auto-detected, Upload File, or Image URL)</label>
                           <input
                             type="file"
                             ref={singleThumbInputRef}
@@ -1517,23 +1662,24 @@ export default function AdminPanel({
                             }}
                           />
 
-                          <div style={{ display: "flex", gap: "14px", alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: "14px", alignItems: "flex-start", flexWrap: "wrap" }}>
                             <div
                               style={{
-                                width: "120px",
-                                height: "70px",
+                                width: "130px",
+                                height: "76px",
                                 borderRadius: "8px",
                                 background: "#f1f5f9",
                                 border: "1px solid #cbd5e1",
                                 overflow: "hidden",
                                 display: "flex",
                                 alignItems: "center",
-                                justifyContent: "center"
+                                justifyContent: "center",
+                                flexShrink: 0
                               }}
                             >
-                              {singleThumbnail ? (
+                              {(singleThumbnailUrl || singleThumbnail) ? (
                                 <img
-                                  src={singleThumbnail}
+                                  src={singleThumbnailUrl || singleThumbnail}
                                   alt="Thumbnail preview"
                                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
                                 />
@@ -1542,13 +1688,40 @@ export default function AdminPanel({
                               )}
                             </div>
 
-                            <button
-                              type="button"
-                              className="vap-btn-secondary"
-                              onClick={() => singleThumbInputRef.current?.click()}
-                            >
-                              Choose Thumbnail
-                            </button>
+                            <div style={{ flex: 1, minWidth: "200px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                              <div style={{ display: "flex", gap: "8px" }}>
+                                <button
+                                  type="button"
+                                  className="vap-btn-secondary"
+                                  style={{ fontSize: "0.82rem", padding: "6px 12px" }}
+                                  onClick={() => singleThumbInputRef.current?.click()}
+                                >
+                                  Choose File
+                                </button>
+                                {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
+                                  <button
+                                    type="button"
+                                    className="vap-btn-secondary"
+                                    style={{ fontSize: "0.82rem", color: "#dc2626", padding: "6px 10px" }}
+                                    onClick={() => {
+                                      setSingleThumbnail("");
+                                      setSingleThumbnailFile(null);
+                                      setSingleThumbnailUrl("");
+                                    }}
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </div>
+                              <input
+                                type="url"
+                                className="vap-input"
+                                style={{ fontSize: "0.85rem", padding: "6px 10px" }}
+                                placeholder="Or enter custom Thumbnail URL"
+                                value={singleThumbnailUrl}
+                                onChange={(e) => setSingleThumbnailUrl(e.target.value)}
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1632,7 +1805,7 @@ export default function AdminPanel({
                               className="vap-input"
                               value={singleDuration}
                               onChange={(e) => setSingleDuration(e.target.value)}
-                              placeholder="03:30"
+                              placeholder="Auto or MM:SS"
                             />
                           </div>
                           <div className="vap-form-group">
@@ -2048,7 +2221,7 @@ export default function AdminPanel({
                             <input
                               type="text"
                               className="vap-input"
-                              placeholder="03:30"
+                              placeholder="Auto or MM:SS"
                               value={linkDuration}
                               onChange={(e) => setLinkDuration(e.target.value)}
                             />
@@ -2501,7 +2674,8 @@ export default function AdminPanel({
                           <input
                             type="text"
                             className="vap-input"
-                            value={editingVideo.duration || "03:30"}
+                            value={editingVideo.duration || ""}
+                            placeholder="Auto or MM:SS"
                             onChange={(e) => setEditingVideo({ ...editingVideo, duration: e.target.value })}
                           />
                         </div>
@@ -2736,7 +2910,7 @@ export default function AdminPanel({
                     {previewVideo.category || "General"}
                   </span>
                   <span style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                    {previewVideo.views || 0} views • {previewVideo.duration || "03:30"}
+                    {previewVideo.views || 0} views{previewVideo.duration ? ` • ${previewVideo.duration}` : ""}
                   </span>
                 </div>
 

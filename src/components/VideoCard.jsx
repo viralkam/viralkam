@@ -21,7 +21,7 @@ export default function VideoCard({ video, onSelectVideo }) {
           loading="lazy" 
           onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
         />
-        <span className="duration-tag">{video.duration || "03:30"}</span>
+        {video.duration && <span className="duration-tag">{video.duration}</span>}
       </div>
 
       <div className="video-card-infos">
@@ -42,7 +42,7 @@ export default function VideoCard({ video, onSelectVideo }) {
             </span>
           )}
 
-          <span className="data-duration">{video.duration || "03:30"}</span>
+          {video.duration && <span className="data-duration">{video.duration}</span>}
         </div>
       </div>
     </div>

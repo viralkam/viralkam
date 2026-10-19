@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS videos (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   description TEXT,
-  duration TEXT DEFAULT '03:30',
+  duration TEXT DEFAULT '',
   views INTEGER DEFAULT 0,
   likes INTEGER DEFAULT 0,
   dislikes INTEGER DEFAULT 0,

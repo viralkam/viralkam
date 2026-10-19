@@ -617,7 +617,7 @@ const server = http.createServer(async (req, res) => {
         id,
         data.title,
         data.description || 'Watch video on VIRALKAM.COM',
-        data.duration || '03:30',
+        data.duration || '',
         initialViews,
         initialLikes,
         Number(data.dislikes || 0),

@@ -8,14 +8,14 @@
 
 // Helper to convert MM:SS to ISO 8601 duration (e.g., "04:20" -> "PT4M20S")
 export function formatISO8601Duration(durationStr) {
-  if (!durationStr) return "PT3M30S";
+  if (!durationStr) return "";
   const parts = durationStr.split(":").map(Number);
   if (parts.length === 2) {
     return `PT${parts[0]}M${parts[1]}S`;
   } else if (parts.length === 3) {
     return `PT${parts[0]}H${parts[1]}M${parts[2]}S`;
   }
-  return "PT3M30S";
+  return "";
 }
 
 /**
@@ -27,7 +27,7 @@ export function generateVideoSEO_AEO_GEO({
   description = "",
   category = "General",
   tags = [],
-  duration = "03:30",
+  duration = "",
   thumbnail = "",
   videoUrl = ""
 }) {
@@ -43,12 +43,12 @@ export function generateVideoSEO_AEO_GEO({
   const canonicalUrl = `https://viralkam.com/?v=${id}`;
 
   // 2. AEO GENERATION (Answer Engine Optimization for Perplexity, ChatGPT Search, Claude, Google SGE)
-  const aeoSummary = `This video features "${cleanTitle}" in the ${cleanCategory} category. Streamed exclusively in high-definition on VIRALKAM.COM, it covers trending highlights with an estimated runtime of ${duration}.`;
+  const aeoSummary = `This video features "${cleanTitle}" in the ${cleanCategory} category. Streamed exclusively in high-definition on VIRALKAM.COM, it covers trending highlights${duration ? ` with a runtime of ${duration}` : ""}.`;
   
   const aeoKeyFacts = [
     { question: `What is "${cleanTitle}" about?`, answer: `${cleanTitle} showcases trending ${cleanCategory} content streaming in 4K on VIRALKAM.` },
     { question: `Where can I watch "${cleanTitle}"?`, answer: `Available for free high-performance streaming on VIRALKAM.COM without paywalls.` },
-    { question: `What is the duration of this video?`, answer: `The total video duration is ${duration} with instant player load.` }
+    { question: `What is the duration of this video?`, answer: duration ? `The total video duration is ${duration} with instant player load.` : `Instant high-performance streaming.` }
   ];
 
   // 3. GEO GENERATION (Generative Engine Optimization for LLMs: Gemini, ChatGPT, Perplexity, Copilot)

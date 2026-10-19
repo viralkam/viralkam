@@ -234,7 +234,7 @@ export default function WatchView({
                     border: "1px solid rgba(255, 255, 255, 0.2)"
                   }}
                 >
-                  PLAY VIDEO ({video.duration || "03:30"})
+                  PLAY VIDEO{video.duration ? ` (${video.duration})` : ""}
                 </span>
               </div>
             </div>
