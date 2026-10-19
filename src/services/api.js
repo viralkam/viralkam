@@ -251,42 +251,47 @@ export const api = {
   },
 
   /**
-   * Upload video or thumbnail file (supports local dev server & R2 object storage)
+   * Upload video or thumbnail file (supports local dev server & R2 object storage with live progress)
    */
-  async uploadVideoFile(file) {
+  async uploadVideoFile(file, onProgress) {
+    const uploadWithXHR = (url) => {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        if (xhr.upload && onProgress) {
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const pct = Math.round((event.loaded / event.total) * 100);
+              onProgress(pct, event.loaded, event.total);
+            }
+          };
+        }
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const data = JSON.parse(xhr.responseText);
+              resolve(data.url || data.cdnUrl);
+            } catch {
+              reject(new Error('Invalid JSON response from upload'));
+            }
+          } else {
+            reject(new Error(`Upload failed (HTTP ${xhr.status})`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.open('POST', url);
+        xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+        xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+        xhr.send(file);
+      });
+    };
+
     // 1. Try local dev endpoint first (/api/upload)
     try {
-      const res = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': file.type || 'video/mp4',
-          'X-File-Name': encodeURIComponent(file.name)
-        },
-        body: file
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.url;
-      }
-    } catch (err) {
-      console.log('Local upload failed, checking R2 endpoint...');
+      return await uploadWithXHR(`${API_BASE}/upload`);
+    } catch {
+      // 2. Fallback to Cloudflare R2 endpoint (/api/r2/upload)
+      return await uploadWithXHR(`${API_BASE}/r2/upload`);
     }
-
-    // 2. Fallback to Cloudflare R2 endpoint (/api/r2/upload)
-    const r2Res = await fetch(`${API_BASE}/r2/upload`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': file.type || 'video/mp4',
-        'X-File-Name': encodeURIComponent(file.name)
-      },
-      body: file
-    });
-    if (!r2Res.ok) {
-      const err = await r2Res.json().catch(() => ({}));
-      throw new Error(err.message || `Storage upload failed (HTTP ${r2Res.status})`);
-    }
-    const data = await r2Res.json();
-    return data.url || data.cdnUrl;
   },
 
   /**

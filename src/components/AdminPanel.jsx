@@ -23,9 +23,11 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  History
 } from "lucide-react";
 import { api } from "../services/api";
+import { uploadHistory } from "../services/uploadHistory";
 import { cleanDisplayTitle, cleanVideoUrl, FALLBACK_THUMBNAIL } from "../utils/format";
 import "./AdminPanel.css";
 
@@ -111,6 +113,24 @@ export default function AdminPanel({
   const [singleInitialLikes, setSingleInitialLikes] = useState("");
   const [singlePrivacy, setSinglePrivacy] = useState("public");
   const [isUploadingSingle, setIsUploadingSingle] = useState(false);
+  const [singleUploadProgress, setSingleUploadProgress] = useState(0);
+  const [singleUploadStep, setSingleUploadStep] = useState("");
+  const [singleUploadSuccessVideo, setSingleUploadSuccessVideo] = useState(null);
+  const [singleUploadError, setSingleUploadError] = useState("");
+
+  // Persistent Upload History State
+  const [historyList, setHistoryList] = useState(() => uploadHistory.getAll());
+  const [historyFilter, setHistoryFilter] = useState("all");
+
+  const refreshHistory = () => {
+    setHistoryList(uploadHistory.getAll());
+  };
+
+  useEffect(() => {
+    const handleStorageChange = () => refreshHistory();
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
 
   // Bulk Upload Form State
   const [bulkFiles, setBulkFiles] = useState([]);
@@ -366,6 +386,9 @@ export default function AdminPanel({
 
   const handleSingleUploadSubmit = async (e) => {
     e.preventDefault();
+    setSingleUploadSuccessVideo(null);
+    setSingleUploadError("");
+
     if (!singleTitle.trim()) {
       showError("Please enter a video title.");
       return;
@@ -381,20 +404,52 @@ export default function AdminPanel({
       return;
     }
 
+    const historyId = `up-${Date.now()}`;
+    const uploadMethod = singleSourceType === "file" ? "Single Upload (File)" : "Single Upload (Direct Link)";
+    const fileNameDesc = singleSourceType === "file" ? singleFile.name : singleVideoUrl.trim();
+    const sizeStr = singleSourceType === "file" ? `${(singleFile.size / (1024 * 1024)).toFixed(2)} MB` : "Direct Stream";
+
+    uploadHistory.addItem({
+      id: historyId,
+      title: singleTitle.trim(),
+      type: uploadMethod,
+      fileName: fileNameDesc,
+      fileSize: sizeStr,
+      duration: singleDuration.trim(),
+      thumbnail: singleThumbnailUrl.trim() || singleThumbnail || FALLBACK_THUMBNAIL,
+      status: "uploading",
+      progress: 10,
+      currentStep: singleSourceType === "file" ? "Uploading video to Cloudflare R2 / Server storage..." : "Verifying video stream..."
+    });
+    refreshHistory();
+
     setIsUploadingSingle(true);
+    setSingleUploadProgress(10);
+    setSingleUploadStep(singleSourceType === "file" ? "Uploading video to Cloudflare R2 / Server storage..." : "Verifying video stream...");
+
     try {
       let finalVideoUrl = "";
       if (singleSourceType === "file") {
-        // Upload file to user's server storage / Cloudflare R2
-        finalVideoUrl = await api.uploadVideoFile(singleFile);
+        finalVideoUrl = await api.uploadVideoFile(singleFile, (pct, loaded, total) => {
+          const loadedMB = (loaded / (1024 * 1024)).toFixed(1);
+          const totalMB = (total / (1024 * 1024)).toFixed(1);
+          const scaledProgress = Math.min(85, Math.round(pct * 0.85));
+          setSingleUploadProgress(scaledProgress);
+          setSingleUploadStep(`Uploading to server storage: ${pct}% (${loadedMB} MB / ${totalMB} MB)...`);
+          uploadHistory.updateItem(historyId, {
+            progress: scaledProgress,
+            currentStep: `Uploading: ${pct}% (${loadedMB}/${totalMB} MB)`
+          });
+          refreshHistory();
+        });
       } else {
-        // Direct CDN / external link - runs directly without duplicating to server storage
         finalVideoUrl = cleanVideoUrl(singleVideoUrl.trim());
       }
 
+      setSingleUploadProgress(88);
+      setSingleUploadStep("Processing thumbnail...");
       let finalThumbnailUrl = singleThumbnailUrl.trim() || singleThumbnail;
       if (singleThumbnailFile) {
-        // Upload custom image to user's server storage
         finalThumbnailUrl = await api.uploadVideoFile(singleThumbnailFile);
       }
 
@@ -423,12 +478,34 @@ export default function AdminPanel({
         uploadedAt: "Just now"
       };
 
+      setSingleUploadProgress(95);
+      setSingleUploadStep("Registering video & publishing to database...");
+      uploadHistory.updateItem(historyId, {
+        progress: 95,
+        currentStep: "Saving to database..."
+      });
+      refreshHistory();
+
       const saved = await api.createVideo(newVideo);
       if (onAddVideo) onAddVideo(saved || newVideo);
 
-      showSuccess(`Video "${singleTitle}" saved and published successfully!`);
+      setSingleUploadProgress(100);
+      setSingleUploadStep("✓ Published Successfully!");
+      setSingleUploadSuccessVideo(saved || newVideo);
 
-      // Reset single upload form
+      uploadHistory.updateItem(historyId, {
+        status: "published",
+        progress: 100,
+        currentStep: "Published Live",
+        videoUrl: finalVideoUrl,
+        videoId: saved?.id || "",
+        thumbnail: finalThumbnailUrl
+      });
+      refreshHistory();
+
+      showSuccess(`Video "${singleTitle}" uploaded and published successfully!`);
+
+      // Reset single upload form fields
       setSingleFile(null);
       setSingleVideoUrl("");
       setSingleTitle("");
@@ -442,13 +519,20 @@ export default function AdminPanel({
       setSingleDuration("");
       setSinglePrivacy("public");
 
-      // Reload stats & videos, navigate to videos tab
+      // Reload stats & videos
       loadStatsAndCategories();
-      setTimeout(() => {
-        setActiveNav("videos");
-      }, 1000);
+      loadVideos();
     } catch (err) {
-      showError(err.message || "Failed to upload video.");
+      const errMsg = err.message || "Failed to upload video.";
+      setSingleUploadError(errMsg);
+      setSingleUploadStep(`Failed: ${errMsg}`);
+      uploadHistory.updateItem(historyId, {
+        status: "failed",
+        error: errMsg,
+        currentStep: "Upload / Publish Failed"
+      });
+      refreshHistory();
+      showError(errMsg);
     } finally {
       setIsUploadingSingle(false);
     }
@@ -510,16 +594,37 @@ export default function AdminPanel({
         continue;
       }
 
+      const histId = `bulk-${item.id}`;
+      uploadHistory.addItem({
+        id: histId,
+        title: item.title,
+        type: "Bulk Upload",
+        fileName: item.file.name,
+        fileSize: `${(item.file.size / (1024 * 1024)).toFixed(2)} MB`,
+        duration: item.duration,
+        thumbnail: item.thumbnail || FALLBACK_THUMBNAIL,
+        status: "uploading",
+        progress: 15,
+        currentStep: "Uploading file to server storage..."
+      });
+      refreshHistory();
+
       // Mark current item uploading
       setBulkFiles((prev) =>
-        prev.map((it) => (it.id === item.id ? { ...it, status: "uploading", progress: 30 } : it))
+        prev.map((it) => (it.id === item.id ? { ...it, status: "uploading", progress: 20 } : it))
       );
 
       try {
-        const fileUrl = await api.uploadVideoFile(item.file);
+        const fileUrl = await api.uploadVideoFile(item.file, (pct) => {
+          const scaled = Math.min(85, Math.round(pct * 0.85));
+          setBulkFiles((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, progress: scaled } : it))
+          );
+          uploadHistory.updateItem(histId, { progress: scaled, currentStep: `Uploaded ${pct}%` });
+        });
 
         setBulkFiles((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, progress: 80 } : it))
+          prev.map((it) => (it.id === item.id ? { ...it, progress: 90 } : it))
         );
 
         const newVideo = {
@@ -551,18 +656,35 @@ export default function AdminPanel({
             it.id === item.id ? { ...it, status: "success", progress: 100, error: "" } : it
           )
         );
+
+        uploadHistory.updateItem(histId, {
+          status: "published",
+          progress: 100,
+          currentStep: "Published Live",
+          videoUrl: fileUrl,
+          videoId: saved?.id || ""
+        });
+        refreshHistory();
       } catch (err) {
         setBulkFiles((prev) =>
           prev.map((it) =>
             it.id === item.id ? { ...it, status: "error", error: err.message || "Upload failed" } : it
           )
         );
+
+        uploadHistory.updateItem(histId, {
+          status: "failed",
+          error: err.message || "Bulk upload failed",
+          currentStep: "Failed"
+        });
+        refreshHistory();
       }
     }
 
     setIsUploadingBulk(false);
     showSuccess(`Bulk upload finished! ${completedCount} of ${total} videos processed.`);
     loadStatsAndCategories();
+    loadVideos();
   };
 
   // ==========================================
@@ -638,6 +760,21 @@ export default function AdminPanel({
       return;
     }
 
+    const histId = `link-${Date.now()}`;
+    uploadHistory.addItem({
+      id: histId,
+      title: finalCleanTitle,
+      type: "Upload via Link",
+      fileName: finalCleanUrl,
+      fileSize: "Direct Link",
+      duration: linkDuration.trim(),
+      thumbnail: linkThumbnail.trim() || FALLBACK_THUMBNAIL,
+      status: "uploading",
+      progress: 50,
+      currentStep: "Saving details to database..."
+    });
+    refreshHistory();
+
     setIsImportingLink(true);
     try {
       const initialViewsNum = parseInt(linkInitialViews, 10) || 0;
@@ -664,7 +801,16 @@ export default function AdminPanel({
       const saved = await api.createVideo(newVideo);
       if (onAddVideo) onAddVideo(saved || newVideo);
 
-      showSuccess(`Video "${linkTitle}" imported successfully from link!`);
+      uploadHistory.updateItem(histId, {
+        status: "published",
+        progress: 100,
+        currentStep: "Published Live",
+        videoUrl: finalCleanUrl,
+        videoId: saved?.id || ""
+      });
+      refreshHistory();
+
+      showSuccess(`Video "${finalCleanTitle}" imported successfully from link!`);
 
       // Reset
       setLinkUrl("");
@@ -678,8 +824,14 @@ export default function AdminPanel({
       setLinkPrivacy("public");
 
       loadStatsAndCategories();
-      setTimeout(() => setActiveNav("videos"), 1000);
+      loadVideos();
     } catch (err) {
+      uploadHistory.updateItem(histId, {
+        status: "failed",
+        error: err.message || "Failed to import video from link.",
+        currentStep: "Failed"
+      });
+      refreshHistory();
       showError(err.message || "Failed to import video from link.");
     } finally {
       setIsImportingLink(false);
@@ -865,18 +1017,43 @@ export default function AdminPanel({
 
         importedCount++;
         setExcelProgress(Math.round((importedCount / validRows.length) * 100));
+
+        uploadHistory.addItem({
+          id: `excel-${Date.now()}-${row.rowNum}`,
+          title: row.title,
+          type: "Excel Import",
+          fileName: excelFile?.name || "Excel Batch",
+          fileSize: `Row ${row.rowNum}`,
+          duration: row.duration || "",
+          thumbnail: row.thumbnail || FALLBACK_THUMBNAIL,
+          status: "published",
+          progress: 100,
+          currentStep: "Published Live",
+          videoUrl: row.videoUrl,
+          videoId: saved?.id || ""
+        });
       } catch (err) {
         console.warn(`Failed row ${row.rowNum}:`, err);
+        uploadHistory.addItem({
+          id: `excel-${Date.now()}-${row.rowNum}`,
+          title: row.title || `Row ${row.rowNum}`,
+          type: "Excel Import",
+          fileName: excelFile?.name || "Excel Batch",
+          status: "failed",
+          error: err.message || "Failed to import row",
+          currentStep: "Failed"
+        });
       }
     }
 
+    refreshHistory();
     setIsImportingExcel(false);
     showSuccess(`Successfully imported ${importedCount} of ${validRows.length} videos from Excel!`);
     setExcelFile(null);
     setExcelParsedRows([]);
     setExcelValidationErrors([]);
     loadStatsAndCategories();
-    setTimeout(() => setActiveNav("videos"), 1200);
+    loadVideos();
   };
 
   // ==========================================
@@ -1093,6 +1270,31 @@ export default function AdminPanel({
           >
             <UploadCloud size={18} />
             <span>Upload Video</span>
+          </button>
+
+          <button
+            className={`vap-nav-item ${activeNav === "history" ? "active" : ""}`}
+            onClick={() => {
+              refreshHistory();
+              setActiveNav("history");
+            }}
+          >
+            <History size={18} />
+            <span>Upload History</span>
+            {historyList.length > 0 && (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  background: "rgba(255, 255, 255, 0.16)",
+                  borderRadius: "10px",
+                  padding: "1px 7px",
+                  fontSize: "0.72rem",
+                  fontWeight: 600
+                }}
+              >
+                {historyList.length}
+              </span>
+            )}
           </button>
 
           <button
@@ -1843,7 +2045,92 @@ export default function AdminPanel({
                           </select>
                         </div>
 
-                        <div style={{ marginTop: "24px" }}>
+                        {/* Live Upload Progress Feedback */}
+                        {isUploadingSingle && (
+                          <div style={{ marginTop: "18px", padding: "14px 16px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                              <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
+                                <Loader2 className="animate-spin" size={15} color="#2563eb" />
+                                {singleUploadStep || "Uploading & processing..."}
+                              </span>
+                              <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#2563eb" }}>
+                                {singleUploadProgress}%
+                              </span>
+                            </div>
+                            <div style={{ width: "100%", height: "8px", background: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                              <div
+                                style={{
+                                  width: `${singleUploadProgress}%`,
+                                  height: "100%",
+                                  background: singleUploadProgress === 100 ? "#16a34a" : "linear-gradient(90deg, #2563eb, #3b82f6)",
+                                  transition: "width 0.25s ease-in-out"
+                                }}
+                              />
+                            </div>
+                            <span style={{ fontSize: "0.78rem", color: "#64748b", marginTop: "6px", display: "block" }}>
+                              Job saved in Upload History. You can check status anytime from the history menu.
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Upload Success Card */}
+                        {singleUploadSuccessVideo && (
+                          <div style={{ marginTop: "18px", padding: "16px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "8px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#15803d", fontWeight: 700, fontSize: "0.95rem" }}>
+                              <CheckCircle2 size={20} color="#16a34a" />
+                              <span>Video Published Live Successfully!</span>
+                            </div>
+                            <p style={{ margin: "6px 0 14px", fontSize: "0.85rem", color: "#374151" }}>
+                              <strong>{singleUploadSuccessVideo.title}</strong> has been saved to your Cloudflare D1 database and is available for streaming.
+                            </p>
+                            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                className="vap-btn-primary"
+                                style={{ padding: "8px 14px", fontSize: "0.83rem" }}
+                                onClick={() => {
+                                  if (onViewVideo) onViewVideo(singleUploadSuccessVideo);
+                                  else window.open(`/?v=${singleUploadSuccessVideo.id}`, "_blank");
+                                }}
+                              >
+                                <Play size={14} />
+                                <span>Watch Video Live</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="vap-btn-secondary"
+                                style={{ padding: "8px 14px", fontSize: "0.83rem" }}
+                                onClick={() => setActiveNav("history")}
+                              >
+                                <History size={14} />
+                                <span>View Upload History</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="vap-btn-secondary"
+                                style={{ padding: "8px 14px", fontSize: "0.83rem" }}
+                                onClick={() => setSingleUploadSuccessVideo(null)}
+                              >
+                                Upload Another
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Upload Error Alert */}
+                        {singleUploadError && (
+                          <div style={{ marginTop: "18px", padding: "14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#991b1b", fontWeight: 700, fontSize: "0.9rem" }}>
+                              <AlertCircle size={18} color="#dc2626" />
+                              <span>Upload or Publish Error</span>
+                            </div>
+                            <p style={{ margin: "6px 0 0", fontSize: "0.83rem", color: "#b91c1c" }}>
+                              {singleUploadError}
+                            </p>
+                          </div>
+                        )}
+
+                        <div style={{ marginTop: "20px" }}>
                           <button
                             type="submit"
                             className="vap-btn-primary"
@@ -1853,10 +2140,10 @@ export default function AdminPanel({
                             {isUploadingSingle ? (
                               <>
                                 <Loader2 className="animate-spin" size={18} />
-                                <span>Uploading & Processing Video...</span>
+                                <span>Uploading ({singleUploadProgress}%)...</span>
                               </>
                             ) : (
-                              <span>Upload Video</span>
+                              <span>Upload & Publish Video</span>
                             )}
                           </button>
                         </div>
@@ -2426,6 +2713,287 @@ export default function AdminPanel({
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ========================================================
+              SCREEN: UPLOAD HISTORY
+              ======================================================== */}
+          {activeNav === "history" && (
+            <div>
+              <div className="vap-page-header">
+                <div>
+                  <h2 className="vap-page-title">Upload History</h2>
+                  <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.85rem" }}>
+                    Persistent records of all upload jobs. Check upload status, verify publishing, and open live videos anytime.
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    className="vap-btn-primary"
+                    onClick={() => setActiveNav("upload")}
+                  >
+                    <UploadCloud size={16} />
+                    <span>Upload New Video</span>
+                  </button>
+
+                  {historyList.length > 0 && (
+                    <button
+                      type="button"
+                      className="vap-btn-secondary"
+                      onClick={() => {
+                        if (window.confirm("Are you sure you want to clear upload history?")) {
+                          uploadHistory.clearAll();
+                          setHistoryList([]);
+                          showSuccess("Upload history cleared.");
+                        }
+                      }}
+                    >
+                      <Trash2 size={15} />
+                      <span>Clear History</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* History Summary Stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px", marginBottom: "20px" }}>
+                <div
+                  className="vap-stat-card"
+                  style={{ cursor: "pointer", border: historyFilter === "all" ? "2px solid #2563eb" : undefined }}
+                  onClick={() => setHistoryFilter("all")}
+                >
+                  <div className="vap-stat-label">Total Jobs</div>
+                  <div className="vap-stat-value" style={{ fontSize: "1.6rem" }}>{historyList.length}</div>
+                </div>
+                <div
+                  className="vap-stat-card"
+                  style={{ cursor: "pointer", border: historyFilter === "published" ? "2px solid #16a34a" : undefined }}
+                  onClick={() => setHistoryFilter("published")}
+                >
+                  <div className="vap-stat-label" style={{ color: "#16a34a" }}>Published Live</div>
+                  <div className="vap-stat-value" style={{ fontSize: "1.6rem", color: "#16a34a" }}>
+                    {historyList.filter((h) => h.status === "published").length}
+                  </div>
+                </div>
+                <div
+                  className="vap-stat-card"
+                  style={{ cursor: "pointer", border: historyFilter === "uploading" ? "2px solid #2563eb" : undefined }}
+                  onClick={() => setHistoryFilter("uploading")}
+                >
+                  <div className="vap-stat-label" style={{ color: "#2563eb" }}>In Progress</div>
+                  <div className="vap-stat-value" style={{ fontSize: "1.6rem", color: "#2563eb" }}>
+                    {historyList.filter((h) => h.status === "uploading").length}
+                  </div>
+                </div>
+                <div
+                  className="vap-stat-card"
+                  style={{ cursor: "pointer", border: historyFilter === "failed" ? "2px solid #dc2626" : undefined }}
+                  onClick={() => setHistoryFilter("failed")}
+                >
+                  <div className="vap-stat-label" style={{ color: "#dc2626" }}>Failed</div>
+                  <div className="vap-stat-value" style={{ fontSize: "1.6rem", color: "#dc2626" }}>
+                    {historyList.filter((h) => h.status === "failed").length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Filter Buttons */}
+              <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+                {["all", "published", "uploading", "failed"].map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`vap-btn-${historyFilter === f ? "primary" : "secondary"}`}
+                    style={{ fontSize: "0.82rem", textTransform: "capitalize", padding: "6px 14px" }}
+                    onClick={() => setHistoryFilter(f)}
+                  >
+                    {f === "all" ? "All Records" : f === "published" ? "Published Live" : f === "uploading" ? "In Progress" : "Failed"}
+                  </button>
+                ))}
+              </div>
+
+              {/* History Table */}
+              <div className="vap-card" style={{ padding: 0, overflow: "hidden" }}>
+                {historyList.length === 0 ? (
+                  <div style={{ padding: "60px 20px", textAlign: "center", color: "#64748b" }}>
+                    <History size={48} color="#cbd5e1" style={{ margin: "0 auto 12px" }} />
+                    <h3 style={{ margin: 0, color: "#1e293b" }}>No Upload History Yet</h3>
+                    <p style={{ margin: "6px 0 16px", fontSize: "0.9rem" }}>
+                      Upload videos via Single, Bulk, Link, or Excel to see persistent status tracking here.
+                    </p>
+                    <button type="button" className="vap-btn-primary" onClick={() => setActiveNav("upload")}>
+                      Upload a Video Now
+                    </button>
+                  </div>
+                ) : (
+                  <div className="vap-table-responsive">
+                    <table className="vap-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: "60px" }}>Thumb</th>
+                          <th>Video Title</th>
+                          <th>Upload Method</th>
+                          <th>File / Size</th>
+                          <th>Duration</th>
+                          <th>Time</th>
+                          <th>Status</th>
+                          <th style={{ textAlign: "right" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {historyList
+                          .filter((item) => {
+                            if (historyFilter === "all") return true;
+                            return item.status === historyFilter;
+                          })
+                          .map((item) => (
+                            <tr key={item.id}>
+                              <td>
+                                <div className="vap-thumb-cell">
+                                  {item.thumbnail ? (
+                                    <img src={item.thumbnail} alt={item.title} />
+                                  ) : (
+                                    <Film size={20} color="#94a3b8" />
+                                  )}
+                                </div>
+                              </td>
+                              <td>
+                                <strong className="vap-video-title">{item.title}</strong>
+                                {item.error && (
+                                  <div style={{ fontSize: "0.78rem", color: "#dc2626", marginTop: "2px" }}>
+                                    Error: {item.error}
+                                  </div>
+                                )}
+                              </td>
+                              <td>
+                                <span className="vap-cat-pill">{item.type}</span>
+                              </td>
+                              <td>
+                                <div
+                                  style={{
+                                    fontSize: "0.85rem",
+                                    color: "#1e293b",
+                                    maxWidth: "160px",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap"
+                                  }}
+                                  title={item.fileName}
+                                >
+                                  {item.fileName || "-"}
+                                </div>
+                                <span style={{ fontSize: "0.75rem", color: "#64748b" }}>{item.fileSize || ""}</span>
+                              </td>
+                              <td>{item.duration || "-"}</td>
+                              <td style={{ fontSize: "0.8rem", color: "#64748b", whiteSpace: "nowrap" }}>
+                                {item.uploadedAt}
+                              </td>
+                              <td>
+                                {item.status === "published" && (
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px",
+                                      color: "#16a34a",
+                                      fontWeight: 600,
+                                      fontSize: "0.85rem",
+                                      background: "#f0fdf4",
+                                      border: "1px solid #bbf7d0",
+                                      padding: "3px 8px",
+                                      borderRadius: "12px"
+                                    }}
+                                  >
+                                    <CheckCircle2 size={13} color="#16a34a" /> Published
+                                  </span>
+                                )}
+                                {item.status === "uploading" && (
+                                  <div style={{ minWidth: "110px" }}>
+                                    <span
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "4px",
+                                        color: "#2563eb",
+                                        fontWeight: 600,
+                                        fontSize: "0.8rem"
+                                      }}
+                                    >
+                                      <Loader2 className="animate-spin" size={13} /> {item.progress}%
+                                    </span>
+                                    <div
+                                      style={{
+                                        width: "100%",
+                                        height: "4px",
+                                        background: "#e2e8f0",
+                                        borderRadius: "2px",
+                                        overflow: "hidden",
+                                        marginTop: "4px"
+                                      }}
+                                    >
+                                      <div style={{ width: `${item.progress}%`, height: "100%", background: "#2563eb" }} />
+                                    </div>
+                                  </div>
+                                )}
+                                {item.status === "failed" && (
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px",
+                                      color: "#dc2626",
+                                      fontWeight: 600,
+                                      fontSize: "0.85rem",
+                                      background: "#fef2f2",
+                                      border: "1px solid #fecaca",
+                                      padding: "3px 8px",
+                                      borderRadius: "12px"
+                                    }}
+                                  >
+                                    <AlertCircle size={13} color="#dc2626" /> Failed
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end", alignItems: "center" }}>
+                                  {item.status === "published" && (
+                                    <button
+                                      type="button"
+                                      className="vap-btn-secondary"
+                                      style={{ padding: "4px 8px", fontSize: "0.8rem" }}
+                                      title="Open video live"
+                                      onClick={() => {
+                                        if (item.videoId) window.open(`/?v=${item.videoId}`, "_blank");
+                                        else if (item.videoUrl) window.open(item.videoUrl, "_blank");
+                                      }}
+                                    >
+                                      <ExternalLink size={13} />
+                                      <span>Watch</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="vap-icon-btn danger"
+                                    title="Remove from history"
+                                    onClick={() => {
+                                      uploadHistory.removeItem(item.id);
+                                      refreshHistory();
+                                    }}
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -507,6 +507,71 @@ export default {
         return String(val);
       };
 
+      // Helper to ensure all required D1 columns exist
+      async function ensureD1Columns(db) {
+        if (!db) return;
+        try {
+          await db.prepare(`
+            CREATE TABLE IF NOT EXISTS videos (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              description TEXT,
+              duration TEXT DEFAULT '',
+              views INTEGER DEFAULT 0,
+              likes INTEGER DEFAULT 0,
+              dislikes INTEGER DEFAULT 0,
+              rating INTEGER DEFAULT 95,
+              category TEXT DEFAULT 'General',
+              tags TEXT,
+              uploadedAt TEXT DEFAULT 'Just now',
+              author TEXT DEFAULT 'VIRALKAM Admin',
+              thumbnail TEXT NOT NULL,
+              videoUrl TEXT NOT NULL
+            )
+          `).run();
+
+          const info = await db.prepare("PRAGMA table_info(videos)").all();
+          const existing = new Set((info?.results || []).map(r => r.name.toLowerCase()));
+
+          const columnsToAdd = [
+            { name: 'duration', sql: "ALTER TABLE videos ADD COLUMN duration TEXT DEFAULT ''" },
+            { name: 'views', sql: "ALTER TABLE videos ADD COLUMN views INTEGER DEFAULT 0" },
+            { name: 'likes', sql: "ALTER TABLE videos ADD COLUMN likes INTEGER DEFAULT 0" },
+            { name: 'dislikes', sql: "ALTER TABLE videos ADD COLUMN dislikes INTEGER DEFAULT 0" },
+            { name: 'rating', sql: "ALTER TABLE videos ADD COLUMN rating INTEGER DEFAULT 95" },
+            { name: 'category', sql: "ALTER TABLE videos ADD COLUMN category TEXT DEFAULT 'General'" },
+            { name: 'tags', sql: "ALTER TABLE videos ADD COLUMN tags TEXT" },
+            { name: 'uploadedat', sql: "ALTER TABLE videos ADD COLUMN uploadedAt TEXT DEFAULT 'Just now'" },
+            { name: 'author', sql: "ALTER TABLE videos ADD COLUMN author TEXT DEFAULT 'VIRALKAM Admin'" },
+            { name: 'hlsurl', sql: "ALTER TABLE videos ADD COLUMN hlsUrl TEXT" },
+            { name: 'embedurl', sql: "ALTER TABLE videos ADD COLUMN embedUrl TEXT" },
+            { name: 'seotitle', sql: "ALTER TABLE videos ADD COLUMN seoTitle TEXT" },
+            { name: 'seodescription', sql: "ALTER TABLE videos ADD COLUMN seoDescription TEXT" },
+            { name: 'canonicalurl', sql: "ALTER TABLE videos ADD COLUMN canonicalUrl TEXT" },
+            { name: 'aeosummary', sql: "ALTER TABLE videos ADD COLUMN aeoSummary TEXT" },
+            { name: 'aeokeyfacts', sql: "ALTER TABLE videos ADD COLUMN aeoKeyFacts TEXT" },
+            { name: 'geoentities', sql: "ALTER TABLE videos ADD COLUMN geoEntities TEXT" },
+            { name: 'schemajsonld', sql: "ALTER TABLE videos ADD COLUMN schemaJsonLd TEXT" },
+            { name: 'status', sql: "ALTER TABLE videos ADD COLUMN status TEXT DEFAULT 'published'" },
+            { name: 'privacy', sql: "ALTER TABLE videos ADD COLUMN privacy TEXT DEFAULT 'public'" },
+            { name: 'initial_views', sql: "ALTER TABLE videos ADD COLUMN initial_views INTEGER DEFAULT 0" },
+            { name: 'initial_likes', sql: "ALTER TABLE videos ADD COLUMN initial_likes INTEGER DEFAULT 0" },
+            { name: 'created_at', sql: "ALTER TABLE videos ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP" },
+            { name: 'updated_at', sql: "ALTER TABLE videos ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP" }
+          ];
+
+          for (const col of columnsToAdd) {
+            if (!existing.has(col.name)) {
+              try {
+                await db.prepare(col.sql).run();
+              } catch {}
+            }
+          }
+        } catch (err) {
+          console.warn('[D1 Migration] Schema check note:', err.message);
+        }
+      }
+
       // 5. POST /api/videos (Publish new video)
       if (pathname === '/api/videos' && method === 'POST') {
         const body = await request.json().catch(() => ({}));
@@ -514,40 +579,8 @@ export default {
           return json({ success: false, message: 'Title is required' }, 400);
         }
 
-        // Auto-create table if not exists with all columns
-        await env.DB.prepare(`
-          CREATE TABLE IF NOT EXISTS videos (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            description TEXT,
-            duration TEXT DEFAULT '',
-            views INTEGER DEFAULT 0,
-            likes INTEGER DEFAULT 0,
-            dislikes INTEGER DEFAULT 0,
-            rating INTEGER DEFAULT 95,
-            category TEXT DEFAULT 'General',
-            tags TEXT,
-            uploadedAt TEXT DEFAULT 'Just now',
-            author TEXT DEFAULT 'VIRALKAM Admin',
-            thumbnail TEXT NOT NULL,
-            videoUrl TEXT NOT NULL,
-            hlsUrl TEXT,
-            embedUrl TEXT,
-            seoTitle TEXT,
-            seoDescription TEXT,
-            canonicalUrl TEXT,
-            aeoSummary TEXT,
-            aeoKeyFacts TEXT,
-            geoEntities TEXT,
-            schemaJsonLd TEXT,
-            status TEXT DEFAULT 'published',
-            privacy TEXT DEFAULT 'public',
-            initial_views INTEGER DEFAULT 0,
-            initial_likes INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-          )
-        `).run();
+        // Auto-heal D1 table schema if any columns are missing
+        await ensureD1Columns(env.DB);
 
         const id = body.id || `vid-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const privacy = (body.privacy || (body.status === 'private' ? 'private' : 'public')).toLowerCase();
@@ -555,52 +588,58 @@ export default {
         const initialViews = Number(body.initial_views ?? body.initialViews ?? 0);
         const initialLikes = Number(body.initial_likes ?? body.initialLikes ?? 0);
 
-        await env.DB.prepare(`
-          INSERT INTO videos (
-            id, title, description, duration, views, likes, dislikes, rating,
-            category, tags, uploadedAt, author, thumbnail, videoUrl,
-            hlsUrl, embedUrl, seoTitle, seoDescription, canonicalUrl,
-            aeoSummary, aeoKeyFacts, geoEntities, schemaJsonLd,
-            status, privacy, initial_views, initial_likes
-          ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?
-          )
-        `).bind(
+        // Fetch actual live table columns in D1
+        let availableCols = new Set();
+        try {
+          const colQuery = await env.DB.prepare("PRAGMA table_info(videos)").all();
+          availableCols = new Set((colQuery?.results || []).map(r => r.name));
+        } catch {}
+
+        const allCandidateFields = {
           id,
-          body.title,
-          body.description || 'Watch video on VIRALKAM.COM',
-          body.duration || '',
-          initialViews,
-          initialLikes,
-          Number(body.dislikes || 0),
-          Number(body.rating || 95),
-          body.category || 'General',
-          toSqlString(body.tags || []),
-          body.uploadedAt || 'Just now',
-          body.author || 'VIRALKAM Admin',
-          body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
-          body.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4',
-          body.hlsUrl || null,
-          body.embedUrl || null,
-          body.seoTitle || null,
-          body.seoDescription || null,
-          body.canonicalUrl || null,
-          toSqlString(body.aeoSummary),
-          toSqlString(body.aeoKeyFacts),
-          toSqlString(body.geoEntities || []),
-          toSqlString(body.schemaJsonLd),
+          title: body.title,
+          description: body.description || 'Watch video on VIRALKAM.COM',
+          duration: body.duration || '',
+          views: initialViews,
+          likes: initialLikes,
+          dislikes: Number(body.dislikes || 0),
+          rating: Number(body.rating || 95),
+          category: body.category || 'General',
+          tags: toSqlString(body.tags || []),
+          uploadedAt: body.uploadedAt || 'Just now',
+          author: body.author || 'VIRALKAM Admin',
+          thumbnail: body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
+          videoUrl: body.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4',
+          hlsUrl: body.hlsUrl || null,
+          embedUrl: body.embedUrl || null,
+          seoTitle: body.seoTitle || null,
+          seoDescription: body.seoDescription || null,
+          canonicalUrl: body.canonicalUrl || null,
+          aeoSummary: toSqlString(body.aeoSummary),
+          aeoKeyFacts: toSqlString(body.aeoKeyFacts),
+          geoEntities: toSqlString(body.geoEntities || []),
+          schemaJsonLd: toSqlString(body.schemaJsonLd),
           status,
           privacy,
-          initialViews,
-          initialLikes
-        ).run();
+          initial_views: initialViews,
+          initial_likes: initialLikes
+        };
+
+        // Filter to only columns that actually exist in the table
+        const insertCols = availableCols.size > 0 
+          ? Object.keys(allCandidateFields).filter(c => availableCols.has(c))
+          : Object.keys(allCandidateFields);
+
+        const placeholders = insertCols.map(() => '?').join(', ');
+        const insertValues = insertCols.map(c => allCandidateFields[c]);
+
+        await env.DB.prepare(`
+          INSERT INTO videos (${insertCols.join(', ')})
+          VALUES (${placeholders})
+        `).bind(...insertValues).run();
 
         const created = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
-        return json({ success: true, message: 'Video published to Cloudflare D1', video: created }, 201);
+        return json({ success: true, message: 'Video published to Cloudflare D1', video: created || allCandidateFields }, 201);
       }
 
       // 6. DELETE /api/videos/:id
