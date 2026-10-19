@@ -666,14 +666,57 @@ export default {
           httpMetadata: { contentType }
         });
 
-        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkam.com';
-        const publicUrl = `https://${cdnDomain}/${fileKey}`;
+        // CDN delivery: uses custom CDN domain if configured or worker edge CDN endpoint
+        const cdnDomain = env.CDN_DOMAIN;
+        const publicUrl = cdnDomain && !cdnDomain.includes('yourdomain')
+          ? `https://${cdnDomain}/${fileKey}`
+          : `${url.origin}/cdn/${fileKey}`;
+
         return json({
           success: true,
           key: fileKey,
           url: publicUrl,
-          message: 'Video file uploaded successfully to Cloudflare R2'
+          cdnUrl: `${url.origin}/cdn/${fileKey}`,
+          message: 'Video file uploaded successfully to Cloudflare R2 Storage'
         });
+      }
+
+      // 9.1 GET /cdn/* or /api/media/* (Direct Edge CDN Video Streaming from R2 with Seeking/Range Support)
+      if ((pathname.startsWith('/cdn/') || pathname.startsWith('/api/media/')) && method === 'GET') {
+        if (!env.BUCKET) {
+          return json({ success: false, message: 'Cloudflare R2 BUCKET not bound' }, 404);
+        }
+
+        const rawKey = pathname.replace(/^\/(cdn|api\/media)\//, '');
+        const key = decodeURIComponent(rawKey);
+
+        const rangeHeader = request.headers.get('Range');
+        const object = await env.BUCKET.get(key, {
+          range: request.headers,
+          onlyIf: request.headers
+        });
+
+        if (!object) {
+          return new Response('Video file not found in R2 Storage', { status: 404 });
+        }
+
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set('etag', object.httpEtag);
+        headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Accept-Ranges', 'bytes');
+        headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+
+        if (object.range) {
+          const start = object.range.offset;
+          const end = object.range.offset + object.range.length - 1;
+          headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);
+          headers.set('Content-Length', String(object.range.length));
+          return new Response(object.body, { headers, status: 206 });
+        }
+
+        headers.set('Content-Length', String(object.size));
+        return new Response(object.body, { headers, status: 200 });
       }
 
       if (env.ASSETS) {

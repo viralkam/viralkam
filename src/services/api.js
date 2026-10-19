@@ -286,7 +286,7 @@ export const api = {
       throw new Error(err.message || `Storage upload failed (HTTP ${r2Res.status})`);
     }
     const data = await r2Res.json();
-    return data.url;
+    return data.url || data.cdnUrl;
   },
 
   /**
