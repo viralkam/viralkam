@@ -33,13 +33,6 @@ export default function WatchView({
   const [dislikes, setDislikes] = useState(video.dislikes || 50);
   const [userVote, setUserVote] = useState(null); // 'like' | 'dislike' | null
   
-  // Fast first-paint: Template, title & description load first; video stream connects on play
-  const [hasUserStartedPlay, setHasUserStartedPlay] = useState(false);
-
-  useEffect(() => {
-    setHasUserStartedPlay(false);
-  }, [video?.id]);
-
   // Automatically generate and inject SEO, AEO, and GEO metadata into document head
   useEffect(() => {
     if (video) {
@@ -161,87 +154,10 @@ export default function WatchView({
       {/* Main Video Player Section */}
       <section className="player-section">
         <div className="player-inner">
-          {!hasUserStartedPlay ? (
-            <div 
-              className="theater-poster-preview"
-              onClick={() => setHasUserStartedPlay(true)}
-              style={{
-                position: "relative",
-                width: "100%",
-                height: "100%",
-                cursor: "pointer",
-                background: "#000",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden"
-              }}
-              title="Click to play video"
-            >
-              <img 
-                src={video.thumbnail || FALLBACK_THUMBNAIL} 
-                alt={cleanTitle} 
-                onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  filter: "brightness(0.85)"
-                }}
-              />
-              {/* Viralkand-style Large Centered Play Button */}
-              <div 
-                style={{
-                  position: "relative",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: "14px",
-                  zIndex: 2
-                }}
-              >
-                <div 
-                  style={{
-                    width: "74px",
-                    height: "74px",
-                    borderRadius: "50%",
-                    background: "rgba(220, 38, 38, 0.95)",
-                    boxShadow: "0 0 35px rgba(220, 38, 38, 0.8)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#fff",
-                    transform: "scale(1)",
-                    transition: "transform 0.2s ease, box-shadow 0.2s ease"
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.08)"}
-                  onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
-                >
-                  <Play size={38} fill="#fff" style={{ marginLeft: "4px" }} />
-                </div>
-                <span 
-                  style={{
-                    background: "rgba(0, 0, 0, 0.8)",
-                    color: "#fff",
-                    padding: "6px 16px",
-                    borderRadius: "20px",
-                    fontSize: "0.85rem",
-                    fontWeight: 600,
-                    letterSpacing: "0.5px",
-                    border: "1px solid rgba(255, 255, 255, 0.2)"
-                  }}
-                >
-                  PLAY VIDEO{video.duration ? ` (${video.duration})` : ""}
-                </span>
-              </div>
-            </div>
-          ) : youtubeId ? (
+          {youtubeId ? (
             <div className="youtube-player-frame-wrap" style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", background: "#000" }}>
               <iframe
-                src={`https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0`}
+                src={`https://www.youtube.com/embed/${youtubeId}?autoplay=0&rel=0`}
                 title={cleanTitle}
                 frameBorder="0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -262,7 +178,7 @@ export default function WatchView({
               />
             </div>
           ) : (
-            <VideoPlayer options={{ ...playerOptions, autoplay: true, preload: "auto" }} />
+            <VideoPlayer options={playerOptions} />
           )}
         </div>
       </section>
