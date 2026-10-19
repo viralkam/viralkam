@@ -51,7 +51,8 @@ export default function Navbar({
                   value={searchQuery}
                   onChange={(e) => {
                     const val = e.target.value;
-                    if (val.trim().toLowerCase() === "/adminenable") {
+                    const cleanVal = val.trim().toLowerCase();
+                    if (cleanVal === "/adminenable" || cleanVal === "/admin") {
                       setSearchQuery("");
                       setShowSearchInput(false);
                       onOpenAdmin();
@@ -61,7 +62,8 @@ export default function Navbar({
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      if (searchQuery.trim().toLowerCase() === "/adminenable") {
+                      const cleanVal = searchQuery.trim().toLowerCase();
+                      if (cleanVal === "/adminenable" || cleanVal === "/admin") {
                         e.preventDefault();
                         setSearchQuery("");
                         setShowSearchInput(false);

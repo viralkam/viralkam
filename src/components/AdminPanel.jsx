@@ -22,7 +22,8 @@ import {
   Loader2,
   Check,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ExternalLink
 } from "lucide-react";
 import { api } from "../services/api";
 import { cleanDisplayTitle, cleanVideoUrl, FALLBACK_THUMBNAIL } from "../utils/format";
@@ -1274,7 +1275,17 @@ export default function AdminPanel({
                                 </div>
                               </td>
                               <td>
-                                <strong className="vap-video-title">{cleanDisplayTitle(vid.title)}</strong>
+                                <strong 
+                                  className="vap-video-title"
+                                  style={{ cursor: "pointer" }}
+                                  title="Open live on website"
+                                  onClick={() => {
+                                    if (onViewVideo) onViewVideo(vid);
+                                    else window.open(`/?v=${vid.id}`, "_blank");
+                                  }}
+                                >
+                                  {cleanDisplayTitle(vid.title)}
+                                </strong>
                               </td>
                               <td>
                                 <span className="vap-cat-pill">{vid.category || "General"}</span>
@@ -1301,8 +1312,18 @@ export default function AdminPanel({
                                 <div className="vap-actions-cell">
                                   <button
                                     className="vap-icon-btn"
+                                    onClick={() => {
+                                      if (onViewVideo) onViewVideo(vid);
+                                      else window.open(`/?v=${vid.id}`, "_blank");
+                                    }}
+                                    title="View Live on Website"
+                                  >
+                                    <ExternalLink size={15} />
+                                  </button>
+                                  <button
+                                    className="vap-icon-btn"
                                     onClick={() => setPreviewVideo(vid)}
-                                    title="View & Play Video"
+                                    title="Play Preview (In Admin)"
                                   >
                                     <Eye size={15} />
                                   </button>
@@ -2376,8 +2397,25 @@ export default function AdminPanel({
                         </div>
                       </div>
 
+                      {/* Live Website URL Box */}
+                      <div style={{ marginTop: "18px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                        <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>
+                          Live Website URL
+                        </div>
+                        <a 
+                          href={`/?v=${editingVideo.id}`} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          style={{ fontSize: "0.85rem", color: "#2563eb", textDecoration: "none", wordBreak: "break-all", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                          title="Open video live on website"
+                        >
+                          <ExternalLink size={13} />
+                          <span>{window.location.origin}/?v={editingVideo.id}</span>
+                        </a>
+                      </div>
+
                       {/* Delete Video Button (red outline at bottom left) */}
-                      <div style={{ marginTop: "28px" }}>
+                      <div style={{ marginTop: "24px" }}>
                         <button
                           type="button"
                           className="vap-btn-danger-outline"

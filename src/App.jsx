@@ -41,92 +41,46 @@ export default function App() {
   const [activeLegalPage, setActiveLegalPage] = useState(null); // "dmca" | "compliance" | "terms" | null
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Load videos strictly from Cloudflare D1 / Server Database on mount
-  React.useEffect(() => {
-    // Purge old legacy custom videos cache
-    try {
-      localStorage.removeItem("vk_custom_videos");
-    } catch {}
-
-    async function loadData() {
-      try {
-        const res = await api.getVideos({ limit: 100 });
-        if (res && res.videos && res.videos.length > 0) {
-          setVideos(res.videos);
-          try {
-            sessionStorage.setItem("vk_cached_videos", JSON.stringify(res.videos));
-          } catch {}
-        }
-      } catch (e) {
-        console.warn("Database sync warning, using initial dataset:", e);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    loadData();
-  }, []);
-
-  // Parse duration helper (e.g. "04:21" -> seconds)
-  const parseDuration = (str) => {
-    if (!str) return 0;
-    const parts = str.split(":").map(Number);
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    return 0;
-  };
-
-  // Filtered and Sorted videos
-  const displayedVideos = useMemo(() => {
-    let list = [...videos];
-
-    // Search query filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(
-        (v) =>
-          v.title.toLowerCase().includes(q) ||
-          v.description.toLowerCase().includes(q) ||
-          v.category.toLowerCase().includes(q) ||
-          (v.tags && v.tags.some((t) => t.toLowerCase().includes(q)))
-      );
-    }
-
-    // Category filter
-    if (activeCategory) {
-      list = list.filter(
-        (v) => v.category.toLowerCase() === activeCategory.toLowerCase()
-      );
-    }
-
-    // Sidebar filter option
-    if (activeFilter === "popular") {
-      list.sort((a, b) => b.likes - a.likes);
-    } else if (activeFilter === "most_viewed") {
-      list.sort((a, b) => b.views - a.views);
-    } else if (activeFilter === "longest") {
-      list.sort((a, b) => parseDuration(b.duration) - parseDuration(a.duration));
-    } else if (activeFilter === "random") {
-      list.sort(() => 0.5 - Math.random());
-    } else {
-      // Default: newest
-    }
-
-    return list;
-  }, [videos, searchQuery, activeCategory, activeFilter]);
-
   const VIDEOS_PER_PAGE = 24;
-  const totalPages = Math.max(1, Math.ceil(displayedVideos.length / VIDEOS_PER_PAGE));
+  const [totalVideosCount, setTotalVideosCount] = useState(0);
 
-  // Paginated videos (strictly 24 videos per page)
-  const paginatedVideos = useMemo(() => {
-    const start = (currentPage - 1) * VIDEOS_PER_PAGE;
-    return displayedVideos.slice(start, start + VIDEOS_PER_PAGE);
-  }, [displayedVideos, currentPage]);
+  // Load videos per-page on demand (prevents network overload)
+  const loadData = React.useCallback(async (pageToLoad = 1) => {
+    setIsLoading(true);
+    try {
+      const res = await api.getVideos({
+        page: pageToLoad,
+        limit: VIDEOS_PER_PAGE,
+        search: searchQuery.trim(),
+        category: activeCategory || "",
+        sort: activeFilter || "newest"
+      });
+      if (res && res.videos) {
+        setVideos(res.videos);
+        if (res.pagination) {
+          setTotalVideosCount(res.pagination.totalVideos !== undefined ? res.pagination.totalVideos : res.videos.length);
+        } else {
+          setTotalVideosCount(res.videos.length);
+        }
+      }
+    } catch (e) {
+      console.warn("Database sync warning, using initial dataset:", e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [searchQuery, activeCategory, activeFilter]);
+
+  React.useEffect(() => {
+    loadData(currentPage);
+  }, [currentPage, loadData]);
 
   // Reset page to 1 whenever search, category, or filter changes
   React.useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, activeCategory, activeFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(totalVideosCount / VIDEOS_PER_PAGE));
+  const paginatedVideos = videos;
 
   const getPageNumbers = () => {
     if (totalPages <= 7) {
@@ -148,11 +102,19 @@ export default function App() {
       const videoId = params.get("v");
       const path = window.location.pathname;
 
+      const lowerPath = path.toLowerCase();
+      const lowerSearch = window.location.search.toLowerCase();
+      const lowerHash = window.location.hash.toLowerCase();
+
       if (
-        path === "/adminenable" ||
-        path === "/admin" ||
-        window.location.search.toLowerCase().includes("adminenable") ||
-        window.location.hash.toLowerCase().includes("adminenable")
+        lowerPath === "/adminenable" ||
+        lowerPath === "/adminenable/" ||
+        lowerPath === "/admin" ||
+        lowerPath === "/admin/" ||
+        lowerSearch.includes("adminenable") ||
+        lowerSearch.includes("admin") ||
+        lowerHash.includes("adminenable") ||
+        lowerHash.includes("admin")
       ) {
         setIsAdminOpen(true);
         setSelectedVideo(null);
@@ -188,6 +150,14 @@ export default function App() {
           setSelectedVideo(found);
           setIsAdminOpen(false);
           setActiveLegalPage(null);
+        } else {
+          api.getVideoById(videoId).then((v) => {
+            if (v) {
+              setSelectedVideo(v);
+              setIsAdminOpen(false);
+              setActiveLegalPage(null);
+            }
+          }).catch(() => {});
         }
       } else {
         setSelectedVideo(null);

@@ -15,6 +15,7 @@ export default function VideoPlayer({ options, onReady }) {
       videoRef.current.appendChild(videoElement);
 
       const player = (playerRef.current = videojs(videoElement, {
+        preload: options.preload || "none",
         ...options,
         fill: true,
         responsive: true
