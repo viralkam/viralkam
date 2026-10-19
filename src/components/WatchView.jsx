@@ -18,6 +18,7 @@ import {
   resetSEOToHome 
 } from "../utils/seoEngine";
 import { api } from "../services/api";
+import { cleanDisplayTitle, cleanVideoUrl, FALLBACK_THUMBNAIL } from "../utils/format";
 
 export default function WatchView({ 
   video, 
@@ -76,16 +77,19 @@ export default function WatchView({
   const totalVotes = likes + dislikes;
   const likePercent = totalVotes > 0 ? Math.round((likes / totalVotes) * 100) : 100;
 
+  const cleanTitle = cleanDisplayTitle(video.title);
+  const cleanUrl = cleanVideoUrl(video.videoUrl);
+
   const playerOptions = {
     autoplay: false,
     controls: true,
     responsive: true,
     fill: true,
-    poster: video.thumbnail,
+    poster: video.thumbnail || FALLBACK_THUMBNAIL,
     sources: [
       {
-        src: video.videoUrl,
-        type: video.videoUrl && video.videoUrl.includes(".m3u8") ? "application/x-mpegURL" : "video/mp4"
+        src: cleanUrl,
+        type: cleanUrl && cleanUrl.includes(".m3u8") ? "application/x-mpegURL" : "video/mp4"
       }
     ]
   };
@@ -153,7 +157,7 @@ export default function WatchView({
             <div className="youtube-player-frame-wrap" style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", background: "#000" }}>
               <iframe
                 src={`https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0`}
-                title={video.title}
+                title={cleanTitle}
                 frameBorder="0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 allowFullScreen
@@ -164,7 +168,7 @@ export default function WatchView({
             <div className="youtube-player-frame-wrap" style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", background: "#000" }}>
               <iframe
                 src={embedSourceUrl}
-                title={video.title}
+                title={cleanTitle}
                 frameBorder="0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 referrerPolicy="no-referrer"
@@ -200,7 +204,7 @@ export default function WatchView({
         <div className="details-grid">
           {/* Left Column: Title & Description */}
           <div className="details-main">
-            <h1 className="watch-title">{video.title}</h1>
+            <h1 className="watch-title">{cleanTitle}</h1>
             <p className="watch-description-text">{video.description}</p>
 
             {/* Row 1: Categories with Folder Icon (matching Screenshot) */}

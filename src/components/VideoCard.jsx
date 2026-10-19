@@ -1,5 +1,6 @@
 import React from "react";
 import { Eye, ThumbsUp } from "lucide-react";
+import { cleanDisplayTitle, FALLBACK_THUMBNAIL } from "../utils/format";
 
 export default function VideoCard({ video, onSelectVideo }) {
   const formatViews = (num) => {
@@ -8,21 +9,24 @@ export default function VideoCard({ video, onSelectVideo }) {
     return num;
   };
 
+  const displayTitle = cleanDisplayTitle(video.title);
+
   return (
     <div className="video-block" onClick={() => onSelectVideo(video)}>
       <div className="thumb-container">
         <img 
-          src={video.thumbnail} 
-          alt={video.title} 
+          src={video.thumbnail || FALLBACK_THUMBNAIL} 
+          alt={displayTitle} 
           className="video-thumb-img"
           loading="lazy" 
+          onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
         />
-        <span className="duration-tag">{video.duration}</span>
+        <span className="duration-tag">{video.duration || "03:30"}</span>
       </div>
 
       <div className="video-card-infos">
-        <h3 className="video-card-title" title={video.title}>
-          {video.title}
+        <h3 className="video-card-title" title={displayTitle}>
+          {displayTitle}
         </h3>
 
         <div className="video-datas">
@@ -38,7 +42,7 @@ export default function VideoCard({ video, onSelectVideo }) {
             </span>
           )}
 
-          <span className="data-duration">{video.duration}</span>
+          <span className="data-duration">{video.duration || "03:30"}</span>
         </div>
       </div>
     </div>

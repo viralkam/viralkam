@@ -122,11 +122,27 @@ function formatVideo(row) {
     parsedEntities = [];
   }
 
+  const cleanDisplayTitle = (rawTitle) => {
+    let t = (rawTitle || '').trim();
+    if (t.startsWith('http://') || t.startsWith('https://')) {
+      try {
+        const cleanUrl = t.replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+        const parts = cleanUrl.split('/');
+        const lastPart = parts[parts.length - 1] || '';
+        const withoutExt = decodeURIComponent(lastPart).replace(/\.[a-zA-Z0-9]+$/, '');
+        const readable = withoutExt.replace(/[-_+]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (readable && readable.length > 2) return readable;
+      } catch {}
+    }
+    return t || 'Untitled Video';
+  };
+
   const privacy = row.privacy || (row.status === 'private' ? 'private' : 'public');
+  const cleanUrl = (row.videoUrl || row.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
 
   return {
     id: row.id,
-    title: row.title,
+    title: cleanDisplayTitle(row.title),
     description: row.description,
     duration: row.duration,
     views: Number(row.views || 0),
@@ -138,7 +154,7 @@ function formatVideo(row) {
     uploadedAt: row.uploadedAt,
     author: row.author,
     thumbnail: row.thumbnail,
-    videoUrl: row.videoUrl,
+    videoUrl: cleanUrl,
     hlsUrl: row.hlsUrl || null,
     embedUrl: row.embedUrl || null,
     seoTitle: row.seoTitle || null,
@@ -388,13 +404,13 @@ const server = http.createServer(async (req, res) => {
       let conditions = [];
       let params = [];
 
-      // Privacy enforcement: non-admin requests ONLY get public videos
+      // Privacy enforcement: non-admin requests ONLY get public videos (NULL safe via COALESCE)
       if (!isAdmin) {
-        conditions.push("(privacy != 'private' AND status != 'private')");
+        conditions.push("(COALESCE(privacy, 'public') != 'private' AND COALESCE(status, 'published') != 'private')");
       } else if (statusFilter === 'public') {
-        conditions.push("(privacy != 'private' AND status != 'private')");
+        conditions.push("(COALESCE(privacy, 'public') != 'private' AND COALESCE(status, 'published') != 'private')");
       } else if (statusFilter === 'private') {
-        conditions.push("(privacy = 'private' OR status = 'private')");
+        conditions.push("(COALESCE(privacy, 'public') = 'private' OR COALESCE(status, 'published') = 'private')");
       }
 
       if (search) {

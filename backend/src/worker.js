@@ -149,11 +149,29 @@ export default {
           LIMIT 6
         `).all();
 
+        const cleanDisplayTitle = (rawTitle) => {
+          let t = (rawTitle || '').trim();
+          if (t.startsWith('http://') || t.startsWith('https://')) {
+            try {
+              const cleanUrl = t.replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+              const parts = cleanUrl.split('/');
+              const lastPart = parts[parts.length - 1] || '';
+              const withoutExt = decodeURIComponent(lastPart).replace(/\.[a-zA-Z0-9]+$/, '');
+              const readable = withoutExt.replace(/[-_+]/g, ' ').replace(/\s+/g, ' ').trim();
+              if (readable && readable.length > 2) return readable;
+            } catch {}
+          }
+          return t || 'Untitled Video';
+        };
+
         const formattedRecent = (recentRows || []).map(v => {
           let tags = [];
           try { tags = typeof v.tags === 'string' ? JSON.parse(v.tags) : (v.tags || []); } catch {}
+          const cleanUrl = (v.videoUrl || v.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
           return {
             ...v,
+            title: cleanDisplayTitle(v.title),
+            videoUrl: cleanUrl,
             tags,
             privacy: v.privacy || (v.status === 'private' ? 'private' : 'public')
           };
@@ -263,16 +281,23 @@ export default {
 
         const isAdmin = await verifyAdminToken(request);
 
+        // Auto-heal table columns and null values in Cloudflare D1
+        try {
+          await env.DB.prepare("ALTER TABLE videos ADD COLUMN privacy TEXT DEFAULT 'public'").run().catch(() => {});
+          await env.DB.prepare("UPDATE videos SET privacy = 'public' WHERE privacy IS NULL OR privacy = ''").run().catch(() => {});
+          await env.DB.prepare("UPDATE videos SET status = 'published' WHERE status IS NULL OR status = ''").run().catch(() => {});
+        } catch {}
+
         let conditions = [];
         let bindings = [];
 
-        // Privacy backend enforcement
+        // Privacy backend enforcement with NULL safety via COALESCE
         if (!isAdmin) {
-          conditions.push("(privacy != 'private' AND status != 'private')");
+          conditions.push("(COALESCE(privacy, 'public') != 'private' AND COALESCE(status, 'published') != 'private')");
         } else if (statusFilter === 'public') {
-          conditions.push("(privacy != 'private' AND status != 'private')");
+          conditions.push("(COALESCE(privacy, 'public') != 'private' AND COALESCE(status, 'published') != 'private')");
         } else if (statusFilter === 'private') {
-          conditions.push("(privacy = 'private' OR status = 'private')");
+          conditions.push("(COALESCE(privacy, 'public') = 'private' OR COALESCE(status, 'published') = 'private')");
         }
 
         if (search) {
@@ -306,6 +331,22 @@ export default {
           LIMIT ? OFFSET ?
         `).bind(...bindings, limit, offset).all();
 
+        // Helper to format clean human-readable title if URL path was entered as title
+        const cleanDisplayTitle = (rawTitle) => {
+          let t = (rawTitle || '').trim();
+          if (t.startsWith('http://') || t.startsWith('https://')) {
+            try {
+              const cleanUrl = t.replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+              const parts = cleanUrl.split('/');
+              const lastPart = parts[parts.length - 1] || '';
+              const withoutExt = decodeURIComponent(lastPart).replace(/\.[a-zA-Z0-9]+$/, '');
+              const readable = withoutExt.replace(/[-_+]/g, ' ').replace(/\s+/g, ' ').trim();
+              if (readable && readable.length > 2) return readable;
+            } catch {}
+          }
+          return t || 'Untitled Video';
+        };
+
         // Format tags & geo
         const formattedVideos = results.map(v => {
           let tags = [];
@@ -313,8 +354,11 @@ export default {
           let geo = [];
           try { geo = typeof v.geoEntities === 'string' ? JSON.parse(v.geoEntities) : (v.geoEntities || []); } catch {}
           const privacy = v.privacy || (v.status === 'private' ? 'private' : 'public');
+          const cleanUrl = (v.videoUrl || v.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
           return {
             ...v,
+            title: cleanDisplayTitle(v.title),
+            videoUrl: cleanUrl,
             tags,
             geoEntities: geo,
             privacy,
@@ -373,10 +417,28 @@ export default {
         let tags = [];
         try { tags = typeof video.tags === 'string' ? JSON.parse(video.tags) : (video.tags || []); } catch {}
 
+        const cleanTitle = (rawTitle) => {
+          let t = (rawTitle || '').trim();
+          if (t.startsWith('http://') || t.startsWith('https://')) {
+            try {
+              const u = t.replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+              const parts = u.split('/');
+              const last = parts[parts.length - 1] || '';
+              const clean = decodeURIComponent(last).replace(/\.[a-zA-Z0-9]+$/, '').replace(/[-_+]/g, ' ').trim();
+              if (clean && clean.length > 2) return clean;
+            } catch {}
+          }
+          return t || 'Untitled Video';
+        };
+
+        const cleanUrl = (video.videoUrl || video.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+
         return json({
           success: true,
           video: {
             ...video,
+            title: cleanTitle(video.title),
+            videoUrl: cleanUrl,
             tags,
             privacy: video.privacy || (video.status === 'private' ? 'private' : 'public')
           }

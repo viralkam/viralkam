@@ -25,6 +25,7 @@ import {
   ChevronRight
 } from "lucide-react";
 import { api } from "../services/api";
+import { cleanDisplayTitle, cleanVideoUrl, FALLBACK_THUMBNAIL } from "../utils/format";
 import "./AdminPanel.css";
 
 export default function AdminPanel({
@@ -492,6 +493,14 @@ export default function AdminPanel({
         setLinkThumbnail(`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`);
       }
     }
+
+    // Auto suggest clean title from URL if title is empty
+    if (!linkTitle && clean) {
+      const suggested = cleanDisplayTitle(clean);
+      if (suggested && suggested !== "Untitled Video") {
+        setLinkTitle(suggested);
+      }
+    }
   };
 
   const handleAddLinkTag = () => {
@@ -508,14 +517,18 @@ export default function AdminPanel({
       showError("Please enter a video URL.");
       return;
     }
-    if (!linkTitle.trim()) {
+
+    const finalCleanUrl = cleanVideoUrl(linkUrl.trim());
+    const finalCleanTitle = cleanDisplayTitle(linkTitle.trim() || finalCleanUrl);
+
+    if (!finalCleanTitle) {
       showError("Please enter a video title.");
       return;
     }
 
     // Validate URL format
     try {
-      new URL(linkUrl.trim());
+      new URL(finalCleanUrl);
     } catch {
       showError("Invalid Video URL format. Please provide a valid HTTP/HTTPS link.");
       return;
@@ -527,13 +540,13 @@ export default function AdminPanel({
       const initialLikesNum = parseInt(linkInitialLikes, 10) || 0;
 
       const newVideo = {
-        title: linkTitle.trim(),
-        description: linkDescription.trim() || `Watch ${linkTitle.trim()} online.`,
+        title: finalCleanTitle,
+        description: linkDescription.trim() || `Watch ${finalCleanTitle} online.`,
         category: linkCategory || "General",
         tags: linkTags.length > 0 ? linkTags : [linkCategory, "Trending"],
         duration: linkDuration || "03:30",
-        videoUrl: linkUrl.trim(),
-        thumbnail: linkThumbnail.trim() || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
+        videoUrl: finalCleanUrl,
+        thumbnail: linkThumbnail.trim() || FALLBACK_THUMBNAIL,
         privacy: linkPrivacy,
         status: linkPrivacy === "private" ? "private" : "published",
         initial_views: initialViewsNum,
@@ -644,15 +657,27 @@ export default function AdminPanel({
             return "";
           };
 
-          const title = findVal(["Title", "Video Title", "Name"]);
+          let title = findVal(["Title", "Video Title", "Name"]);
           const description = findVal(["Description", "Desc", "Summary"]);
           const category = findVal(["Category", "Cat"]) || "General";
           const tagsStr = findVal(["Tags", "Tag", "Keywords"]);
-          const videoUrl = findVal(["Video URL", "VideoUrl", "URL", "Link"]);
+          let videoUrl = findVal(["Video URL", "VideoUrl", "URL", "Link"]);
           const duration = findVal(["Duration", "Time", "Length"]) || "03:30";
           const initialViews = findVal(["Initial Views", "Views", "InitialViews"]);
           const initialLikes = findVal(["Initial Likes", "Likes", "InitialLikes"]);
           const privacyRaw = findVal(["Privacy", "Status", "Visibility"]) || "Public";
+
+          // Auto-heal path mismatch if user placed URL in Title column or Title is a file path
+          if (title && (title.startsWith("http://") || title.startsWith("https://"))) {
+            if (!videoUrl) videoUrl = title;
+            title = cleanDisplayTitle(title);
+          } else if (!title && videoUrl) {
+            title = cleanDisplayTitle(videoUrl);
+          } else if (title) {
+            title = cleanDisplayTitle(title);
+          }
+
+          videoUrl = cleanVideoUrl(videoUrl, "https://vjs.zencdn.net/v/oceans.mp4");
 
           if (!title) {
             rowErrors.push("Title is required");
@@ -753,6 +778,8 @@ export default function AdminPanel({
   const handleStartEdit = (video) => {
     setEditingVideo({
       ...video,
+      title: cleanDisplayTitle(video.title),
+      videoUrl: cleanVideoUrl(video.videoUrl || video.title),
       tags: Array.isArray(video.tags) ? video.tags : [],
       privacy: video.privacy || (video.status === "private" ? "private" : "public"),
       initial_views: video.initial_views !== undefined ? video.initial_views : (video.views || 0),
@@ -1065,12 +1092,16 @@ export default function AdminPanel({
                           <tr key={vid.id}>
                             <td>
                               <div className="vap-thumb-cell">
-                                <img src={vid.thumbnail} alt={vid.title} />
+                                <img 
+                                  src={vid.thumbnail || FALLBACK_THUMBNAIL} 
+                                  alt={cleanDisplayTitle(vid.title)} 
+                                  onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
+                                />
                                 <span className="vap-duration-badge">{vid.duration || "03:30"}</span>
                               </div>
                             </td>
                             <td>
-                              <strong className="vap-video-title">{vid.title}</strong>
+                              <strong className="vap-video-title">{cleanDisplayTitle(vid.title)}</strong>
                             </td>
                             <td>
                               <span className="vap-cat-pill">{vid.category || "General"}</span>
@@ -1234,12 +1265,16 @@ export default function AdminPanel({
                               </td>
                               <td>
                                 <div className="vap-thumb-cell">
-                                  <img src={vid.thumbnail} alt={vid.title} />
+                                  <img 
+                                    src={vid.thumbnail || FALLBACK_THUMBNAIL} 
+                                    alt={cleanDisplayTitle(vid.title)} 
+                                    onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
+                                  />
                                   <span className="vap-duration-badge">{vid.duration || "03:30"}</span>
                                 </div>
                               </td>
                               <td>
-                                <strong className="vap-video-title">{vid.title}</strong>
+                                <strong className="vap-video-title">{cleanDisplayTitle(vid.title)}</strong>
                               </td>
                               <td>
                                 <span className="vap-cat-pill">{vid.category || "General"}</span>
@@ -2324,8 +2359,9 @@ export default function AdminPanel({
                             }}
                           >
                             <img
-                              src={editingVideo.thumbnail}
+                              src={editingVideo.thumbnail || FALLBACK_THUMBNAIL}
                               alt="Thumbnail"
+                              onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
                               style={{ width: "100%", height: "100%", objectFit: "cover" }}
                             />
                           </div>
@@ -2631,7 +2667,7 @@ export default function AdminPanel({
         <div className="vap-modal-backdrop" onClick={() => setPreviewVideo(null)}>
           <div className="vap-modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="vap-modal-header">
-              <h3>{previewVideo.title}</h3>
+              <h3>{cleanDisplayTitle(previewVideo.title)}</h3>
               <button className="vap-icon-btn" onClick={() => setPreviewVideo(null)}>
                 <X size={18} />
               </button>
@@ -2640,15 +2676,15 @@ export default function AdminPanel({
               <div className="vap-modal-video">
                 {previewVideo.videoUrl && previewVideo.videoUrl.includes("youtube.com") ? (
                   <iframe
-                    src={previewVideo.videoUrl.replace("watch?v=", "embed/")}
-                    title={previewVideo.title}
+                    src={cleanVideoUrl(previewVideo.videoUrl).replace("watch?v=", "embed/")}
+                    title={cleanDisplayTitle(previewVideo.title)}
                     style={{ width: "100%", height: "100%", border: "none" }}
                     allowFullScreen
                   />
                 ) : (
                   <video
-                    src={previewVideo.videoUrl}
-                    poster={previewVideo.thumbnail}
+                    src={cleanVideoUrl(previewVideo.videoUrl)}
+                    poster={previewVideo.thumbnail || FALLBACK_THUMBNAIL}
                     controls
                     autoPlay
                     style={{ width: "100%", height: "100%", objectFit: "contain" }}
