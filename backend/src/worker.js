@@ -9,20 +9,12 @@ export default {
     const pathname = url.pathname;
     const method = request.method;
 
-    // Serve Frontend Static Assets if not an /api route (with SPA fallback)
-    if (!pathname.startsWith('/api') && env.ASSETS) {
-      const assetRes = await env.ASSETS.fetch(request);
-      if (assetRes.status === 404) {
-        return env.ASSETS.fetch(new Request(new URL('/', request.url), request));
-      }
-      return assetRes;
-    }
-
     // Security & CORS Headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, Range, X-File-Name',
+      'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
       'Content-Type': 'application/json',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'SAMEORIGIN',
@@ -31,6 +23,77 @@ export default {
 
     if (method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
+    }
+
+    // 0. Direct Edge CDN Video & Media Streaming from R2 Storage (with Seeking & Range Support)
+    if ((pathname.startsWith('/cdn/') || pathname.startsWith('/api/media/')) && method === 'GET') {
+      if (!env.BUCKET) {
+        return new Response(JSON.stringify({ success: false, message: 'Cloudflare R2 BUCKET not bound' }), {
+          status: 404,
+          headers: corsHeaders
+        });
+      }
+
+      const rawKey = pathname.replace(/^\/(cdn|api\/media)\//, '');
+      const key = decodeURIComponent(rawKey);
+
+      try {
+        const object = await env.BUCKET.get(key, {
+          range: request.headers,
+          onlyIf: request.headers
+        });
+
+        if (!object) {
+          return new Response('File not found in R2 Storage', {
+            status: 404,
+            headers: { 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set('etag', object.httpEtag);
+        headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Access-Control-Allow-Headers', 'Range, Content-Type');
+        headers.set('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+        headers.set('Accept-Ranges', 'bytes');
+        headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+
+        // Infer correct Content-Type if missing or generic octet-stream
+        const existingType = headers.get('Content-Type');
+        if (!existingType || existingType === 'application/octet-stream') {
+          const lowerKey = key.toLowerCase();
+          if (lowerKey.endsWith('.mp4')) headers.set('Content-Type', 'video/mp4');
+          else if (lowerKey.endsWith('.webm')) headers.set('Content-Type', 'video/webm');
+          else if (lowerKey.endsWith('.m3u8')) headers.set('Content-Type', 'application/x-mpegURL');
+          else if (lowerKey.endsWith('.jpg') || lowerKey.endsWith('.jpeg')) headers.set('Content-Type', 'image/jpeg');
+          else if (lowerKey.endsWith('.png')) headers.set('Content-Type', 'image/png');
+          else if (lowerKey.endsWith('.webp')) headers.set('Content-Type', 'image/webp');
+          else headers.set('Content-Type', 'video/mp4');
+        }
+
+        if (object.range) {
+          const start = object.range.offset;
+          const end = object.range.offset + object.range.length - 1;
+          headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);
+          headers.set('Content-Length', String(object.range.length));
+          return new Response(object.body, { headers, status: 206 });
+        }
+
+        headers.set('Content-Length', String(object.size));
+        return new Response(object.body, { headers, status: 200 });
+      } catch (streamErr) {
+        return new Response('Streaming error: ' + streamErr.message, { status: 500 });
+      }
+    }
+
+    // Serve Frontend Static Assets if not an /api route (with SPA fallback)
+    if (!pathname.startsWith('/api') && !pathname.startsWith('/cdn/') && env.ASSETS) {
+      const assetRes = await env.ASSETS.fetch(request);
+      if (assetRes.status === 404) {
+        return env.ASSETS.fetch(new Request(new URL('/', request.url), request));
+      }
+      return assetRes;
     }
 
     // Helper to send JSON
@@ -164,14 +227,25 @@ export default {
           return t || 'Untitled Video';
         };
 
+        const resolveMediaUrl = (mediaPath) => {
+          if (!mediaPath) return '';
+          let u = String(mediaPath).trim().replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+          if (u.includes('vcdn.viralkam.com/')) {
+            u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, `${url.origin}/cdn/`);
+          } else if (u.startsWith('/cdn/')) {
+            u = `${url.origin}${u}`;
+          }
+          return u;
+        };
+
         const formattedRecent = (recentRows || []).map(v => {
           let tags = [];
           try { tags = typeof v.tags === 'string' ? JSON.parse(v.tags) : (v.tags || []); } catch {}
-          const cleanUrl = (v.videoUrl || v.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
           return {
             ...v,
             title: cleanDisplayTitle(v.title),
-            videoUrl: cleanUrl,
+            videoUrl: resolveMediaUrl(v.videoUrl || v.title || ''),
+            thumbnail: resolveMediaUrl(v.thumbnail || ''),
             tags,
             privacy: v.privacy || (v.status === 'private' ? 'private' : 'public')
           };
@@ -347,6 +421,17 @@ export default {
           return t || 'Untitled Video';
         };
 
+        const resolveMediaUrl = (mediaPath) => {
+          if (!mediaPath) return '';
+          let u = String(mediaPath).trim().replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+          if (u.includes('vcdn.viralkam.com/')) {
+            u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, `${url.origin}/cdn/`);
+          } else if (u.startsWith('/cdn/')) {
+            u = `${url.origin}${u}`;
+          }
+          return u;
+        };
+
         // Format tags & geo
         const formattedVideos = results.map(v => {
           let tags = [];
@@ -354,11 +439,11 @@ export default {
           let geo = [];
           try { geo = typeof v.geoEntities === 'string' ? JSON.parse(v.geoEntities) : (v.geoEntities || []); } catch {}
           const privacy = v.privacy || (v.status === 'private' ? 'private' : 'public');
-          const cleanUrl = (v.videoUrl || v.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
           return {
             ...v,
             title: cleanDisplayTitle(v.title),
-            videoUrl: cleanUrl,
+            videoUrl: resolveMediaUrl(v.videoUrl || v.title || ''),
+            thumbnail: resolveMediaUrl(v.thumbnail || ''),
             tags,
             geoEntities: geo,
             privacy,
@@ -431,14 +516,24 @@ export default {
           return t || 'Untitled Video';
         };
 
-        const cleanUrl = (video.videoUrl || video.title || '').replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+        const resolveMediaUrl = (mediaPath) => {
+          if (!mediaPath) return '';
+          let u = String(mediaPath).trim().replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+          if (u.includes('vcdn.viralkam.com/')) {
+            u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, `${url.origin}/cdn/`);
+          } else if (u.startsWith('/cdn/')) {
+            u = `${url.origin}${u}`;
+          }
+          return u;
+        };
 
         return json({
           success: true,
           video: {
             ...video,
             title: cleanTitle(video.title),
-            videoUrl: cleanUrl,
+            videoUrl: resolveMediaUrl(video.videoUrl || video.title || ''),
+            thumbnail: resolveMediaUrl(video.thumbnail || ''),
             tags,
             privacy: video.privacy || (video.status === 'private' ? 'private' : 'public')
           }
@@ -705,57 +800,20 @@ export default {
           httpMetadata: { contentType }
         });
 
-        // CDN delivery: uses custom CDN domain if configured or worker edge CDN endpoint
+        // Default to worker edge CDN endpoint to ensure immediate 100% working stream
+        const edgeCdnUrl = `${url.origin}/cdn/${fileKey}`;
         const cdnDomain = env.CDN_DOMAIN;
-        const publicUrl = cdnDomain && !cdnDomain.includes('yourdomain')
+        const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
           ? `https://${cdnDomain}/${fileKey}`
-          : `${url.origin}/cdn/${fileKey}`;
+          : edgeCdnUrl;
 
         return json({
           success: true,
           key: fileKey,
           url: publicUrl,
-          cdnUrl: `${url.origin}/cdn/${fileKey}`,
+          cdnUrl: edgeCdnUrl,
           message: 'Video file uploaded successfully to Cloudflare R2 Storage'
         });
-      }
-
-      // 9.1 GET /cdn/* or /api/media/* (Direct Edge CDN Video Streaming from R2 with Seeking/Range Support)
-      if ((pathname.startsWith('/cdn/') || pathname.startsWith('/api/media/')) && method === 'GET') {
-        if (!env.BUCKET) {
-          return json({ success: false, message: 'Cloudflare R2 BUCKET not bound' }, 404);
-        }
-
-        const rawKey = pathname.replace(/^\/(cdn|api\/media)\//, '');
-        const key = decodeURIComponent(rawKey);
-
-        const rangeHeader = request.headers.get('Range');
-        const object = await env.BUCKET.get(key, {
-          range: request.headers,
-          onlyIf: request.headers
-        });
-
-        if (!object) {
-          return new Response('Video file not found in R2 Storage', { status: 404 });
-        }
-
-        const headers = new Headers();
-        object.writeHttpMetadata(headers);
-        headers.set('etag', object.httpEtag);
-        headers.set('Access-Control-Allow-Origin', '*');
-        headers.set('Accept-Ranges', 'bytes');
-        headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-
-        if (object.range) {
-          const start = object.range.offset;
-          const end = object.range.offset + object.range.length - 1;
-          headers.set('Content-Range', `bytes ${start}-${end}/${object.size}`);
-          headers.set('Content-Length', String(object.range.length));
-          return new Response(object.body, { headers, status: 206 });
-        }
-
-        headers.set('Content-Length', String(object.size));
-        return new Response(object.body, { headers, status: 200 });
       }
 
       if (env.ASSETS) {

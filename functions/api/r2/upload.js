@@ -19,8 +19,11 @@ export async function onRequestPost(context) {
       httpMetadata: { contentType }
     });
 
-    const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkam.com';
-    const publicUrl = `https://${cdnDomain}/${fileKey}`;
+    const url = new URL(request.url);
+    const cdnDomain = env.CDN_DOMAIN;
+    const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
+      ? `https://${cdnDomain}/${fileKey}`
+      : `${url.origin}/cdn/${fileKey}`;
 
     return Response.json({
       success: true,

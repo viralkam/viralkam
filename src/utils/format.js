@@ -57,6 +57,16 @@ export function cleanVideoUrl(rawUrl, fallbackUrl = '') {
   // Strip accidental quotes or trailing punctuation
   u = u.replace(/^["']+|["']+$/g, '');
 
+  // If pointing to unconfigured or unreachable vcdn.viralkam.com, rewrite to edge CDN endpoint
+  if (u.includes('vcdn.viralkam.com/')) {
+    u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, '/cdn/');
+  }
+
+  // If running in browser and URL is a relative /cdn/ path, resolve to full origin URL
+  if (typeof window !== 'undefined' && u.startsWith('/cdn/')) {
+    u = `${window.location.origin}${u}`;
+  }
+
   return u || fallbackUrl;
 }
 
