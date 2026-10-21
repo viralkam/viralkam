@@ -344,16 +344,15 @@ export default {
       // 3. GET /api/videos (with search, category, privacy, sorting, pagination)
       if (pathname === '/api/videos' && method === 'GET') {
         const params = url.searchParams;
+        const isAdmin = await verifyAdminToken(request);
         const page = Math.max(1, parseInt(params.get('page')) || 1);
         const rawLimit = parseInt(params.get('limit')) || 24;
-        const limit = Math.min(Math.max(1, rawLimit), 100);
+        const limit = isAdmin ? Math.min(Math.max(1, rawLimit), 10000) : Math.min(Math.max(1, rawLimit), 100);
         const offset = (page - 1) * limit;
         const search = (params.get('search') || params.get('q') || '').trim().slice(0, 100);
         const category = (params.get('category') || '').trim().slice(0, 50);
         const statusFilter = (params.get('status') || params.get('privacy') || '').trim().toLowerCase();
         const sort = params.get('sort') || 'newest';
-
-        const isAdmin = await verifyAdminToken(request);
 
         // Auto-heal table columns and null values in Cloudflare D1
         try {

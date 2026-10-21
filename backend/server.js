@@ -391,15 +391,15 @@ const server = http.createServer(async (req, res) => {
 
     // 3. GET /api/videos - list & search videos with pagination & backend privacy enforcement
     if (pathname === '/api/videos' && req.method === 'GET') {
+      const isAdmin = verifyAdminToken(req, ADMIN_EMAIL, JWT_SECRET);
       const page = parseInt(query.page) || 1;
-      const limit = parseInt(query.limit) || 24;
+      const rawLimit = parseInt(query.limit) || 24;
+      const limit = isAdmin ? Math.min(Math.max(1, rawLimit), 10000) : Math.min(Math.max(1, rawLimit), 100);
       const offset = (page - 1) * limit;
       const search = (query.search || query.q || '').trim();
       const category = (query.category || '').trim();
       const statusFilter = (query.status || query.privacy || '').trim().toLowerCase();
       const sort = query.sort || 'newest';
-
-      const isAdmin = verifyAdminToken(req, ADMIN_EMAIL, JWT_SECRET);
 
       let conditions = [];
       let params = [];

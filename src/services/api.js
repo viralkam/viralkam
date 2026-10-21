@@ -133,6 +133,32 @@ export const api = {
   },
 
   /**
+   * Fetch ALL videos from database for Excel export (admin access)
+   */
+  async getAllVideosForExport() {
+    try {
+      const res = await this.getVideos({ page: 1, limit: 10000, sort: 'newest' });
+      if (res && res.success && Array.isArray(res.videos)) {
+        let all = [...res.videos];
+        const totalPages = res?.pagination?.totalPages || 1;
+        if (totalPages > 1) {
+          for (let p = 2; p <= totalPages; p++) {
+            const nextRes = await this.getVideos({ page: p, limit: 10000, sort: 'newest' });
+            if (nextRes?.videos && Array.isArray(nextRes.videos)) {
+              all = all.concat(nextRes.videos);
+            }
+          }
+        }
+        return all;
+      }
+      return res?.videos || [];
+    } catch (err) {
+      console.error('[API] Failed to fetch all videos for export:', err);
+      return [];
+    }
+  },
+
+  /**
    * Fetch single video
    */
   async getVideoById(id) {

@@ -87,6 +87,12 @@ export default function AdminPanel({
   // Video Preview Modal
   const [previewVideo, setPreviewVideo] = useState(null);
 
+  // Excel Export Modal State
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportIncludeStorage, setExportIncludeStorage] = useState(true);
+  const [exportIncludeLinks, setExportIncludeLinks] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+
   // Edit Video State
   const [editingVideo, setEditingVideo] = useState(null);
   const [editFile, setEditFile] = useState(null);
@@ -883,6 +889,160 @@ export default function AdminPanel({
     XLSX.writeFile(workbook, "video_import_template.xlsx");
   };
 
+  // Helper to determine if video is stored on user's storage server (R2 / CDN)
+  const isServerStorageVideo = (v) => {
+    const url = (v?.videoUrl || "").toLowerCase();
+    return (
+      url.includes("/cdn/") ||
+      url.includes("vcdn.") ||
+      url.includes("r2.cloudflarestorage.com") ||
+      url.includes(".r2.dev") ||
+      url.includes("viralkaam-videos") ||
+      url.includes("viralkam-videos")
+    );
+  };
+
+  // Full Data Excel Export Handler (.xlsx format with selection for storage server vs links)
+  const handleExportToExcel = async () => {
+    if (!exportIncludeStorage && !exportIncludeLinks) {
+      showError("Kripya kam se kam ek option select karein (Storage Server ya Link wali).");
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      let allVideos = [];
+      try {
+        const fullList = await api.getAllVideosForExport();
+        if (fullList && fullList.length > 0) {
+          allVideos = fullList;
+        } else {
+          allVideos = videosList.length > 0 ? videosList : initialVideos;
+        }
+      } catch (err) {
+        console.warn("[Export] Falling back to local videosList:", err);
+        allVideos = videosList.length > 0 ? videosList : initialVideos;
+      }
+
+      // Filter based on user selection
+      const filteredVideos = allVideos.filter((v) => {
+        const isStorage = isServerStorageVideo(v);
+        if (exportIncludeStorage && exportIncludeLinks) return true;
+        if (exportIncludeStorage && isStorage) return true;
+        if (exportIncludeLinks && !isStorage) return true;
+        return false;
+      });
+
+      if (filteredVideos.length === 0) {
+        showError("Chune gaye option ke hisaab se koi video nahi mili.");
+        setIsExporting(false);
+        return;
+      }
+
+      // Generate exact row format matching user's Excel column requirements
+      const excelRows = filteredVideos.map((v) => {
+        let uploadDate = "";
+        let uploadTime = "";
+        const candidate = v.created_at || v.uploadedAt;
+        let d = null;
+        if (candidate && !isNaN(new Date(candidate).getTime())) {
+          d = new Date(candidate);
+        }
+        if (d) {
+          const day = String(d.getDate()).padStart(2, "0");
+          const month = String(d.getMonth() + 1).padStart(2, "0");
+          uploadDate = `${day}/${month}/${d.getFullYear()}`;
+          const hours = d.getHours();
+          const minutes = String(d.getMinutes()).padStart(2, "0");
+          const seconds = String(d.getSeconds()).padStart(2, "0");
+          uploadTime = `${hours}:${minutes}:${seconds}`;
+        } else {
+          if (v.uploadedAt && v.uploadedAt.includes("/")) {
+            uploadDate = v.uploadedAt;
+          } else {
+            const now = new Date();
+            const day = String(now.getDate()).padStart(2, "0");
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            uploadDate = `${day}/${month}/${now.getFullYear()}`;
+          }
+          uploadTime = v.uploadTime || "00:00:00";
+        }
+
+        // Tags formatting
+        let tagsStr = "";
+        if (Array.isArray(v.tags)) {
+          tagsStr = v.tags.join(", ");
+        } else if (typeof v.tags === "string") {
+          if (v.tags.trim().startsWith("[")) {
+            try {
+              const parsedTags = JSON.parse(v.tags);
+              tagsStr = Array.isArray(parsedTags) ? parsedTags.join(", ") : v.tags;
+            } catch {
+              tagsStr = v.tags;
+            }
+          } else {
+            tagsStr = v.tags;
+          }
+        }
+
+        const rawPriv = String(v.privacy || v.status || "Public").toLowerCase();
+        const privacy = rawPriv === "private" ? "Private" : "Public";
+
+        return {
+          "Video URL": v.videoUrl || "",
+          "Thumbnail URL": v.thumbnail || "",
+          "Title": v.title || "",
+          "Description": v.description || "",
+          "Category": v.category || "General",
+          "Tags": tagsStr,
+          "Duration": v.duration || "",
+          "Initial Views": Number(v.views || 0),
+          "Initial Likes": Number(v.likes || 0),
+          "Upload Date": uploadDate,
+          "Upload Time": uploadTime,
+          "Privacy": privacy
+        };
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(excelRows);
+      worksheet["!cols"] = [
+        { wch: 45 }, // Video URL
+        { wch: 40 }, // Thumbnail URL
+        { wch: 35 }, // Title
+        { wch: 50 }, // Description
+        { wch: 15 }, // Category
+        { wch: 30 }, // Tags
+        { wch: 10 }, // Duration
+        { wch: 12 }, // Initial Views
+        { wch: 12 }, // Initial Likes
+        { wch: 14 }, // Upload Date
+        { wch: 12 }, // Upload Time
+        { wch: 10 }  // Privacy
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Videos");
+
+      let fileTypeLabel = "all";
+      if (exportIncludeStorage && !exportIncludeLinks) fileTypeLabel = "storage_server";
+      if (!exportIncludeStorage && exportIncludeLinks) fileTypeLabel = "external_links";
+
+      const now = new Date();
+      const dateTag = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      const fileName = `viralkaam_videos_${fileTypeLabel}_${dateTag}.xlsx`;
+
+      XLSX.writeFile(workbook, fileName);
+
+      showSuccess(`Successfully exported ${excelRows.length} videos to ${fileName}!`);
+      setShowExportModal(false);
+    } catch (err) {
+      console.error("[Export] Error generating excel:", err);
+      showError("Export fail ho gaya: " + err.message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const handleExcelFileSelect = (file) => {
     if (!file) return;
     setExcelFile(file);
@@ -1446,16 +1606,28 @@ export default function AdminPanel({
             <div>
               <div className="vap-page-header">
                 <h2 className="vap-page-title">Videos</h2>
-                <button
-                  className="vap-btn-primary"
-                  onClick={() => {
-                    setActiveNav("upload");
-                    setUploadTab("single");
-                  }}
-                >
-                  <Plus size={16} />
-                  <span>Upload Video</span>
-                </button>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="vap-btn-secondary"
+                    onClick={() => setShowExportModal(true)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                    title="Export videos to Excel (.xlsx)"
+                  >
+                    <FileSpreadsheet size={16} />
+                    <span>Export to Excel</span>
+                  </button>
+                  <button
+                    className="vap-btn-primary"
+                    onClick={() => {
+                      setActiveNav("upload");
+                      setUploadTab("single");
+                    }}
+                  >
+                    <Plus size={16} />
+                    <span>Upload Video</span>
+                  </button>
+                </div>
               </div>
 
               {/* Search & Filters */}
@@ -2589,14 +2761,27 @@ export default function AdminPanel({
                       </p>
                     </div>
 
-                    <button
-                      type="button"
-                      className="vap-btn-secondary"
-                      onClick={handleDownloadExcelTemplate}
-                    >
-                      <Download size={16} />
-                      <span>Download Sample Excel Template</span>
-                    </button>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="vap-btn-primary"
+                        onClick={() => setShowExportModal(true)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
+                        title="Export current videos to Excel (.xlsx)"
+                      >
+                        <FileSpreadsheet size={16} />
+                        <span>Export Videos to Excel</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="vap-btn-secondary"
+                        onClick={handleDownloadExcelTemplate}
+                      >
+                        <Download size={16} />
+                        <span>Download Sample Template</span>
+                      </button>
+                    </div>
                   </div>
 
                   <input
@@ -3495,6 +3680,173 @@ export default function AdminPanel({
                     <span className="vap-badge-public">Public</span>
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          EXCEL DATA EXPORT MODAL
+          ======================================================== */}
+      {showExportModal && (
+        <div className="vap-modal-backdrop" onClick={() => !isExporting && setShowExportModal(false)}>
+          <div className="vap-modal-content vap-export-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="vap-modal-header">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", color: "#16a34a" }}>
+                  <FileSpreadsheet size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0 }}>Export Videos to Excel</h3>
+                  <span className="vap-export-header-badge">.xlsx Format</span>
+                </div>
+              </div>
+              <button
+                className="vap-icon-btn"
+                onClick={() => !isExporting && setShowExportModal(false)}
+                disabled={isExporting}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="vap-modal-body">
+              <p style={{ margin: "0 0 14px", color: "#475569", fontSize: "0.9rem" }}>
+                Select karein aapko kaunse format ki videos export karni hain. Excel sheet me exact standard columns aayengi:
+              </p>
+
+              {/* Quick Preset Buttons */}
+              <div className="vap-export-presets">
+                <button
+                  type="button"
+                  className="vap-export-preset-btn"
+                  onClick={() => {
+                    setExportIncludeStorage(true);
+                    setExportIncludeLinks(true);
+                  }}
+                >
+                  ✓ Sabhi Videos (All)
+                </button>
+                <button
+                  type="button"
+                  className="vap-export-preset-btn"
+                  onClick={() => {
+                    setExportIncludeStorage(true);
+                    setExportIncludeLinks(false);
+                  }}
+                >
+                  Storage Server Only
+                </button>
+                <button
+                  type="button"
+                  className="vap-export-preset-btn"
+                  onClick={() => {
+                    setExportIncludeStorage(false);
+                    setExportIncludeLinks(true);
+                  }}
+                >
+                  Direct Links Only
+                </button>
+              </div>
+
+              {/* Selection Cards with Checkboxes */}
+              <div className="vap-export-card-group">
+                {/* 1. Storage Server Card */}
+                <div
+                  className={`vap-export-card ${exportIncludeStorage ? "selected" : ""}`}
+                  onClick={() => setExportIncludeStorage(!exportIncludeStorage)}
+                >
+                  <div className="vap-export-card-checkbox">
+                    {exportIncludeStorage && <Check size={14} strokeWidth={3} />}
+                  </div>
+                  <div className="vap-export-card-content">
+                    <div className="vap-export-card-title-row">
+                      <span className="vap-export-card-title">
+                        Mere Storage Server Ki Videos
+                      </span>
+                      <span className="vap-export-card-pill">
+                        Cloudflare R2 / Server CDN
+                      </span>
+                    </div>
+                    <p className="vap-export-card-desc">
+                      Wo saari videos jo aapke server storage ya Cloudflare R2 bucket me uploaded hain (/cdn/, vcdn).
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. Direct Links Card */}
+                <div
+                  className={`vap-export-card ${exportIncludeLinks ? "selected" : ""}`}
+                  onClick={() => setExportIncludeLinks(!exportIncludeLinks)}
+                >
+                  <div className="vap-export-card-checkbox">
+                    {exportIncludeLinks && <Check size={14} strokeWidth={3} />}
+                  </div>
+                  <div className="vap-export-card-content">
+                    <div className="vap-export-card-title-row">
+                      <span className="vap-export-card-title">
+                        Link Ke Through Chalne Wali Videos
+                      </span>
+                      <span className="vap-export-card-pill">
+                        External Direct Links
+                      </span>
+                    </div>
+                    <p className="vap-export-card-desc">
+                      Wo saari videos jo external direct URLs ya embedded links ke zariye chal rahi hain.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Format Columns Preview */}
+              <div className="vap-export-format-preview">
+                <div><strong>Columns in Exported Excel:</strong></div>
+                <div className="vap-export-cols-tags">
+                  <span className="vap-export-col-tag">Video URL</span>
+                  <span className="vap-export-col-tag">Thumbnail URL</span>
+                  <span className="vap-export-col-tag">Title</span>
+                  <span className="vap-export-col-tag">Description</span>
+                  <span className="vap-export-col-tag">Category</span>
+                  <span className="vap-export-col-tag">Tags</span>
+                  <span className="vap-export-col-tag">Duration</span>
+                  <span className="vap-export-col-tag">Initial Views</span>
+                  <span className="vap-export-col-tag">Initial Likes</span>
+                  <span className="vap-export-col-tag">Upload Date</span>
+                  <span className="vap-export-col-tag">Upload Time</span>
+                  <span className="vap-export-col-tag">Privacy</span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ marginTop: "20px", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+                <button
+                  type="button"
+                  className="vap-btn-secondary"
+                  onClick={() => setShowExportModal(false)}
+                  disabled={isExporting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="vap-btn-primary"
+                  onClick={handleExportToExcel}
+                  disabled={isExporting || (!exportIncludeStorage && !exportIncludeLinks)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "8px", minWidth: "180px", justifyContent: "center" }}
+                >
+                  {isExporting ? (
+                    <>
+                      <Loader2 size={16} className="vap-spin" />
+                      <span>Generating Excel...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download size={16} />
+                      <span>Download Excel (.xlsx)</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>
