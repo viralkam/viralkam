@@ -1,4 +1,4 @@
--- Cloudflare D1 / SQLite Database Schema for VIRALKAM.COM
+-- Cloudflare D1 / SQLite Database Schema for VIRALKAAM.COM
 
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS videos (
   category TEXT DEFAULT 'General',
   tags TEXT, -- JSON array of tags as string
   uploadedAt TEXT DEFAULT 'Just now',
-  author TEXT DEFAULT 'VIRALKAM Admin',
+  author TEXT DEFAULT 'VIRALKAAM Admin',
   thumbnail TEXT NOT NULL,
   videoUrl TEXT NOT NULL,
   hlsUrl TEXT,

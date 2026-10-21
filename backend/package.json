@@ -1,7 +1,7 @@
 {
-  "name": "viralkam-backend",
+  "name": "viralkaam-backend",
   "version": "1.0.0",
-  "description": "Cloudflare D1 & R2 Backend for VIRALKAM.COM",
+  "description": "Cloudflare D1 & R2 Backend for VIRALKAAM.COM",
   "main": "server.js",
   "type": "module",
   "scripts": {

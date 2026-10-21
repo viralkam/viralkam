@@ -1,5 +1,5 @@
 /**
- * Persistent Upload History Service for VIRALKAM Admin Panel
+ * Persistent Upload History Service for VIRALKAAM Admin Panel
  * Tracks all video upload jobs in localStorage so status is preserved even if user refreshes/leaves.
  */
 

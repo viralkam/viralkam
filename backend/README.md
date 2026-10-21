@@ -1,4 +1,4 @@
-# VIRALKAM.COM - Cloudflare Backend (D1 Database + R2 Storage + Workers API)
+# VIRALKAAM.COM - Cloudflare Backend (D1 Database + R2 Storage + Workers API)
 
 A complete high-performance, zero-egress backend built specifically for **Cloudflare**.
 
@@ -64,7 +64,7 @@ npx wrangler secret put JWT_SECRET
 npx wrangler deploy
 ```
 
-Done! Your API will be live globally at `https://viralkam-api.<your-subdomain>.workers.dev`.
+Done! Your API will be live globally at `https://viralkaam-api.<your-subdomain>.workers.dev`.
 
 ---
 

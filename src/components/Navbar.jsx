@@ -36,7 +36,7 @@ export default function Navbar({
           }} 
           title="Go to Home"
         >
-          <h1 className="site-title">VIRALKAM.COM</h1>
+          <h1 className="site-title">VIRALKAAM.COM</h1>
         </div>
 
         {/* Right side items */}

@@ -42,7 +42,7 @@ export default function WatchView({
       const seoData = video.schemaJsonLd ? {
         seoTitle: video.seoTitle,
         seoDescription: video.seoDescription,
-        canonicalUrl: video.canonicalUrl || `https://viralkam.com/?v=${video.id}`,
+        canonicalUrl: video.canonicalUrl || `https://viralkaam.com/?v=${video.id}`,
         aeoSummary: video.aeoSummary,
         aeoKeyFacts: video.aeoKeyFacts,
         geoEntities: video.geoEntities,
@@ -330,7 +330,7 @@ export default function WatchView({
             </button>
           </div>
           <p className="footer-copyright-text">
-            © 2026 - VIRALKAM.COM. All rights reserved.
+            © 2026 - VIRALKAAM.COM. All rights reserved.
           </p>
         </footer>
       </section>

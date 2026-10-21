@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker API for VIRALKAM.COM
+ * Cloudflare Worker API for VIRALKAAM.COM
  * Native Edge implementation with Cloudflare D1 (SQL Database) & Cloudflare R2 (Object Storage)
  */
 
@@ -230,8 +230,8 @@ export default {
         const resolveMediaUrl = (mediaPath) => {
           if (!mediaPath) return '';
           let u = String(mediaPath).trim().replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
-          if (u.includes('vcdn.viralkam.com/')) {
-            u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, `${url.origin}/cdn/`);
+          if (u.includes('vcdn.viralkaam.com/') || u.includes('vcdn.viralkam.com/')) {
+            u = u.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, `${url.origin}/cdn/`);
           } else if (u.startsWith('/cdn/')) {
             u = `${url.origin}${u}`;
           }
@@ -424,8 +424,8 @@ export default {
         const resolveMediaUrl = (mediaPath) => {
           if (!mediaPath) return '';
           let u = String(mediaPath).trim().replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
-          if (u.includes('vcdn.viralkam.com/')) {
-            u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, `${url.origin}/cdn/`);
+          if (u.includes('vcdn.viralkaam.com/') || u.includes('vcdn.viralkam.com/')) {
+            u = u.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, `${url.origin}/cdn/`);
           } else if (u.startsWith('/cdn/')) {
             u = `${url.origin}${u}`;
           }
@@ -519,8 +519,8 @@ export default {
         const resolveMediaUrl = (mediaPath) => {
           if (!mediaPath) return '';
           let u = String(mediaPath).trim().replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
-          if (u.includes('vcdn.viralkam.com/')) {
-            u = u.replace(/https?:\/\/vcdn\.viralkam\.com\//, `${url.origin}/cdn/`);
+          if (u.includes('vcdn.viralkaam.com/') || u.includes('vcdn.viralkam.com/')) {
+            u = u.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, `${url.origin}/cdn/`);
           } else if (u.startsWith('/cdn/')) {
             u = `${url.origin}${u}`;
           }
@@ -619,7 +619,7 @@ export default {
               category TEXT DEFAULT 'General',
               tags TEXT,
               uploadedAt TEXT DEFAULT 'Just now',
-              author TEXT DEFAULT 'VIRALKAM Admin',
+              author TEXT DEFAULT 'VIRALKAAM Admin',
               thumbnail TEXT NOT NULL,
               videoUrl TEXT NOT NULL
             )
@@ -637,7 +637,7 @@ export default {
             { name: 'category', sql: "ALTER TABLE videos ADD COLUMN category TEXT DEFAULT 'General'" },
             { name: 'tags', sql: "ALTER TABLE videos ADD COLUMN tags TEXT" },
             { name: 'uploadedat', sql: "ALTER TABLE videos ADD COLUMN uploadedAt TEXT DEFAULT 'Just now'" },
-            { name: 'author', sql: "ALTER TABLE videos ADD COLUMN author TEXT DEFAULT 'VIRALKAM Admin'" },
+            { name: 'author', sql: "ALTER TABLE videos ADD COLUMN author TEXT DEFAULT 'VIRALKAAM Admin'" },
             { name: 'hlsurl', sql: "ALTER TABLE videos ADD COLUMN hlsUrl TEXT" },
             { name: 'embedurl', sql: "ALTER TABLE videos ADD COLUMN embedUrl TEXT" },
             { name: 'seotitle', sql: "ALTER TABLE videos ADD COLUMN seoTitle TEXT" },
@@ -693,7 +693,7 @@ export default {
         const allCandidateFields = {
           id,
           title: body.title,
-          description: body.description || 'Watch video on VIRALKAM.COM',
+          description: body.description || 'Watch video on VIRALKAAM.COM',
           duration: body.duration || '',
           views: initialViews,
           likes: initialLikes,
@@ -702,7 +702,7 @@ export default {
           category: body.category || 'General',
           tags: toSqlString(body.tags || []),
           uploadedAt: body.uploadedAt || 'Just now',
-          author: body.author || 'VIRALKAM Admin',
+          author: body.author || 'VIRALKAAM Admin',
           thumbnail: body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
           videoUrl: body.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4',
           hlsUrl: body.hlsUrl || null,
@@ -803,7 +803,7 @@ export default {
         // Default to worker edge CDN endpoint to ensure immediate 100% working stream
         const edgeCdnUrl = `${url.origin}/cdn/${fileKey}`;
         const cdnDomain = env.CDN_DOMAIN;
-        const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
+        const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkaam.com') && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
           ? `https://${cdnDomain}/${fileKey}`
           : edgeCdnUrl;
 

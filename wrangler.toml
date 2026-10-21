@@ -1,4 +1,4 @@
-name = "viralkam"
+name = "viralkaam"
 main = "backend/src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
@@ -10,9 +10,9 @@ not_found_handling = "single-page-application"
 
 [vars]
 ENVIRONMENT = "production"
-SITE_NAME = "VIRALKAM.COM"
+SITE_NAME = "VIRALKAAM.COM"
 CONTACT_EMAIL = "viralkam.com@gmail.com"
-CDN_DOMAIN = "vcdn.viralkam.com"
+CDN_DOMAIN = "vcdn.viralkaam.com"
 ADMIN_EMAIL = "viralkam.com@gmail.com"
 # Note: For production on Cloudflare, set ADMIN_PASS and JWT_SECRET securely via:
 # npx wrangler secret put ADMIN_PASS

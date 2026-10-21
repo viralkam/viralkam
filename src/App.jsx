@@ -423,7 +423,7 @@ export default function App() {
             {/* Site SEO Description Banner (matching Screenshot) */}
             <section className="feed-seo-banner">
               <h2 className="feed-seo-title">
-                VIRALKAM.COM! Daily Updated Latest Viral Videos
+                VIRALKAAM.COM! Daily Updated Latest Viral Videos
               </h2>
               <p className="feed-seo-desc">
                 2026 2025 New Viral Videos Free Streaming Web Platform!
@@ -446,7 +446,7 @@ export default function App() {
                 </button>
               </div>
               <p className="footer-copyright-text">
-                © 2026 - VIRALKAM.COM. All rights reserved.
+                © 2026 - VIRALKAAM.COM. All rights reserved.
               </p>
             </footer>
           </main>

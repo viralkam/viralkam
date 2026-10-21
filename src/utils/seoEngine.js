@@ -1,5 +1,5 @@
 /**
- * VIRALKAM SEO, AEO, and GEO Automatic Generation Engine
+ * VIRALKAAM SEO, AEO, and GEO Automatic Generation Engine
  * 
  * - SEO (Search Engine Optimization): Google/Bing meta titles, descriptions, OpenGraph, Twitter Cards.
  * - AEO (Answer Engine Optimization): AI Answer Engines (Perplexity, ChatGPT, Google AI Overviews) Q&A and declarative summaries.
@@ -36,25 +36,25 @@ export function generateVideoSEO_AEO_GEO({
   const tagList = Array.isArray(tags) ? tags : (tags ? tags.split(",").map(t => t.trim()) : []);
 
   // 1. SEO GENERATION (Google / Bing / Social)
-  const seoTitle = `${cleanTitle} - Full HD 4K Video | VIRALKAM`;
+  const seoTitle = `${cleanTitle} - Full HD 4K Video | VIRALKAAM`;
   const seoDescription = description.trim() 
     ? (description.length > 155 ? description.substring(0, 152) + "..." : description)
-    : `Watch ${cleanTitle} online in Ultra HD 4K on VIRALKAM. Explore top ${cleanCategory} viral videos, trending highlights, and high-speed streaming.`;
-  const canonicalUrl = `https://viralkam.com/?v=${id}`;
+    : `Watch ${cleanTitle} online in Ultra HD 4K on VIRALKAAM. Explore top ${cleanCategory} viral videos, trending highlights, and high-speed streaming.`;
+  const canonicalUrl = `https://viralkaam.com/?v=${id}`;
 
   // 2. AEO GENERATION (Answer Engine Optimization for Perplexity, ChatGPT Search, Claude, Google SGE)
-  const aeoSummary = `This video features "${cleanTitle}" in the ${cleanCategory} category. Streamed exclusively in high-definition on VIRALKAM.COM, it covers trending highlights${duration ? ` with a runtime of ${duration}` : ""}.`;
+  const aeoSummary = `This video features "${cleanTitle}" in the ${cleanCategory} category. Streamed exclusively in high-definition on VIRALKAAM.COM, it covers trending highlights${duration ? ` with a runtime of ${duration}` : ""}.`;
   
   const aeoKeyFacts = [
-    { question: `What is "${cleanTitle}" about?`, answer: `${cleanTitle} showcases trending ${cleanCategory} content streaming in 4K on VIRALKAM.` },
-    { question: `Where can I watch "${cleanTitle}"?`, answer: `Available for free high-performance streaming on VIRALKAM.COM without paywalls.` },
+    { question: `What is "${cleanTitle}" about?`, answer: `${cleanTitle} showcases trending ${cleanCategory} content streaming in 4K on VIRALKAAM.` },
+    { question: `Where can I watch "${cleanTitle}"?`, answer: `Available for free high-performance streaming on VIRALKAAM.COM without paywalls.` },
     { question: `What is the duration of this video?`, answer: duration ? `The total video duration is ${duration} with instant player load.` : `Instant high-performance streaming.` }
   ];
 
   // 3. GEO GENERATION (Generative Engine Optimization for LLMs: Gemini, ChatGPT, Perplexity, Copilot)
   const geoEntities = [
-    "VIRALKAM",
-    "VIRALKAM.COM",
+    "VIRALKAAM",
+    "VIRALKAAM.COM",
     cleanCategory,
     "Viral Video",
     "4K UHD Video Streaming",
@@ -67,7 +67,7 @@ export function generateVideoSEO_AEO_GEO({
   const schemaJsonLd = {
     "@context": "https://schema.org",
     "@type": "VideoObject",
-    "@id": `https://viralkam.com/?v=${id}#video`,
+    "@id": `https://viralkaam.com/?v=${id}#video`,
     "name": seoTitle,
     "description": seoDescription,
     "thumbnailUrl": [
@@ -76,16 +76,16 @@ export function generateVideoSEO_AEO_GEO({
     "uploadDate": new Date().toISOString(),
     "duration": isoDuration,
     "contentUrl": videoUrl || "https://vjs.zencdn.net/v/oceans.mp4",
-    "embedUrl": `https://viralkam.com/?v=${id}`,
+    "embedUrl": `https://viralkaam.com/?v=${id}`,
     "genre": cleanCategory,
     "keywords": geoEntities.join(", "),
     "publisher": {
       "@type": "Organization",
-      "name": "VIRALKAM",
-      "url": "https://viralkam.com",
+      "name": "VIRALKAAM",
+      "url": "https://viralkaam.com",
       "logo": {
         "@type": "ImageObject",
-        "url": "https://viralkam.com/favicon.svg"
+        "url": "https://viralkaam.com/favicon.svg"
       }
     },
     "interactionStatistic": {
@@ -149,14 +149,14 @@ export function applySEOToHead(seoData) {
     setMeta("name", "twitter:image", seoData.schemaJsonLd.thumbnailUrl[0]);
   }
 
-  setMeta("property", "og:site_name", "VIRALKAM");
+  setMeta("property", "og:site_name", "VIRALKAAM");
   setMeta("property", "og:type", "video.other");
 
   // 4. Inject or Update Schema.org JSON-LD (AEO & GEO)
-  let scriptElem = document.getElementById("viralkam-dynamic-jsonld");
+  let scriptElem = document.getElementById("viralkaam-dynamic-jsonld");
   if (!scriptElem) {
     scriptElem = document.createElement("script");
-    scriptElem.id = "viralkam-dynamic-jsonld";
+    scriptElem.id = "viralkaam-dynamic-jsonld";
     scriptElem.type = "application/ld+json";
     document.head.appendChild(scriptElem);
   }
@@ -164,18 +164,18 @@ export function applySEOToHead(seoData) {
 }
 
 /**
- * Reset head tags back to default VIRALKAM Home state
+ * Reset head tags back to default VIRALKAAM Home state
  */
 export function resetSEOToHome() {
-  document.title = "VIRALKAM.COM - Top Viral & Trending Videos Free Streaming";
+  document.title = "VIRALKAAM.COM - Top Viral & Trending Videos Free Streaming";
 
-  let scriptElem = document.getElementById("viralkam-dynamic-jsonld");
+  let scriptElem = document.getElementById("viralkaam-dynamic-jsonld");
   if (scriptElem) {
     scriptElem.remove();
   }
 
   const descElem = document.querySelector('meta[name="description"]');
   if (descElem) {
-    descElem.setAttribute("content", "VIRALKAM.COM is the ultimate high-performance video streaming platform delivering daily updated viral videos, 4K HD trending clips, and categories.");
+    descElem.setAttribute("content", "VIRALKAAM.COM is the ultimate high-performance video streaming platform delivering daily updated viral videos, 4K HD trending clips, and categories.");
   }
 }

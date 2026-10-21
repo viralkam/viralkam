@@ -40,15 +40,15 @@ export default function LegalPage({ pageType = "dmca", onNavigateHome, onSelectL
           <h1 className="legal-page-title">18 U.S.C 2257</h1>
           <div className="legal-card-box">
             <p className="legal-para">
-              Viralkam.com is not a producer (primary or secondary) of any or all of the content found on the website. With respect to the records as per 18 USC 2257 for the content found on this site, please kindly direct your request to the site for which the content was produced.
+              Viralkaam.com is not a producer (primary or secondary) of any or all of the content found on the website. With respect to the records as per 18 USC 2257 for the content found on this site, please kindly direct your request to the site for which the content was produced.
             </p>
 
             <p className="legal-para">
-              Viralkam.com is a live video sharing site which allows the general viewing of various types of content.
+              Viralkaam.com is a live video sharing site which allows the general viewing of various types of content.
             </p>
 
             <p className="legal-para">
-              Viralkam.com abides by the following procedures to ensure compliance:
+              Viralkaam.com abides by the following procedures to ensure compliance:
             </p>
 
             <p className="legal-para">
@@ -137,7 +137,7 @@ export default function LegalPage({ pageType = "dmca", onNavigateHome, onSelectL
           </button>
         </div>
         <p className="footer-copyright-text">
-          2026 - VIRALKAM.COM. All rights reserved.
+          2026 - VIRALKAAM.COM. All rights reserved.
         </p>
       </footer>
     </div>

@@ -1,5 +1,5 @@
 /**
- * VIRALKAM API Client Service
+ * VIRALKAAM API Client Service
  * Connects to Cloudflare Workers / D1 API with graceful fallback to mock data
  */
 

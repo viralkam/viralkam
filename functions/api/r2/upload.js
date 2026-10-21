@@ -21,7 +21,7 @@ export async function onRequestPost(context) {
 
     const url = new URL(request.url);
     const cdnDomain = env.CDN_DOMAIN;
-    const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
+    const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkaam.com') && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
       ? `https://${cdnDomain}/${fileKey}`
       : `${url.origin}/cdn/${fileKey}`;
 

@@ -33,9 +33,9 @@ const PORT = process.env.PORT || 5000;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@localhost.local';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
 const JWT_SECRET = process.env.JWT_SECRET || 'local_development_jwt_secret_32_chars_min';
-const CDN_DOMAIN = process.env.CDN_DOMAIN || 'vcdn.viralkam.com';
-const SITE_NAME = process.env.SITE_NAME || 'VIRALKAM';
-const CONTACT_EMAIL = process.env.CONTACT_EMAIL || 'contact@yourdomain.com';
+const CDN_DOMAIN = process.env.CDN_DOMAIN || 'vcdn.viralkaam.com';
+const SITE_NAME = process.env.SITE_NAME || 'VIRALKAAM.COM';
+const CONTACT_EMAIL = process.env.CONTACT_EMAIL || 'viralkam.com@gmail.com';
 
 // Token generation & verification helpers
 function createSignedToken(email, secret) {
@@ -616,7 +616,7 @@ const server = http.createServer(async (req, res) => {
       insertStmt.run(
         id,
         data.title,
-        data.description || 'Watch video on VIRALKAM.COM',
+        data.description || 'Watch video on VIRALKAAM.COM',
         data.duration || '',
         initialViews,
         initialLikes,
@@ -625,7 +625,7 @@ const server = http.createServer(async (req, res) => {
         data.category || 'General',
         toSqlString(data.tags || []),
         data.uploadedAt || 'Just now',
-        data.author || 'VIRALKAM Admin',
+        data.author || 'VIRALKAAM Admin',
         data.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
         data.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4',
         data.hlsUrl || null,
