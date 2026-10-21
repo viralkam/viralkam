@@ -889,23 +889,23 @@ export default function AdminPanel({
     XLSX.writeFile(workbook, "video_import_template.xlsx");
   };
 
-  // Helper to determine if video is stored on user's storage server (R2 / CDN)
+  // Helper to determine if video is stored on user's Cloudflare R2 storage
   const isServerStorageVideo = (v) => {
     const url = (v?.videoUrl || "").toLowerCase();
     return (
       url.includes("/cdn/") ||
-      url.includes("vcdn.") ||
       url.includes("r2.cloudflarestorage.com") ||
       url.includes(".r2.dev") ||
       url.includes("viralkaam-videos") ||
-      url.includes("viralkam-videos")
+      url.includes("viralkam-videos") ||
+      url.includes("vcdn.")
     );
   };
 
-  // Full Data Excel Export Handler (.xlsx format with selection for storage server vs links)
+  // Full Data Excel Export Handler (.xlsx format with selection for R2 storage vs external links)
   const handleExportToExcel = async () => {
     if (!exportIncludeStorage && !exportIncludeLinks) {
-      showError("Kripya kam se kam ek option select karein (Storage Server ya Link wali).");
+      showError("Kripya kam se kam ek option select karein (Cloudflare R2 ya Link wali).");
       return;
     }
 
@@ -988,19 +988,37 @@ export default function AdminPanel({
         const rawPriv = String(v.privacy || v.status || "Public").toLowerCase();
         const privacy = rawPriv === "private" ? "Private" : "Public";
 
+        // Excel strictly limits cell characters to 32,767. Large Base64 thumbnails or descriptions
+        // exceed this threshold and cause SheetJS/Excel export to fail.
+        const safeExcelStr = (val, maxLen = 32000) => {
+          if (val === null || val === undefined) return "";
+          const str = String(val);
+          return str.length > maxLen ? str.slice(0, maxLen) : str;
+        };
+
+        const safeThumbnail = (() => {
+          const t = String(v.thumbnail || "");
+          if (!t) return "";
+          // If thumbnail is a massive base64 string (>30000 chars), use fallback to avoid breaking Excel
+          if (t.startsWith("data:") && t.length > 30000) {
+            return FALLBACK_THUMBNAIL;
+          }
+          return safeExcelStr(t, 32000);
+        })();
+
         return {
-          "Video URL": v.videoUrl || "",
-          "Thumbnail URL": v.thumbnail || "",
-          "Title": v.title || "",
-          "Description": v.description || "",
-          "Category": v.category || "General",
-          "Tags": tagsStr,
-          "Duration": v.duration || "",
+          "Video URL": safeExcelStr(v.videoUrl || ""),
+          "Thumbnail URL": safeThumbnail,
+          "Title": safeExcelStr(v.title || ""),
+          "Description": safeExcelStr(v.description || ""),
+          "Category": safeExcelStr(v.category || "General"),
+          "Tags": safeExcelStr(tagsStr),
+          "Duration": safeExcelStr(v.duration || ""),
           "Initial Views": Number(v.views || 0),
           "Initial Likes": Number(v.likes || 0),
-          "Upload Date": uploadDate,
-          "Upload Time": uploadTime,
-          "Privacy": privacy
+          "Upload Date": safeExcelStr(uploadDate),
+          "Upload Time": safeExcelStr(uploadTime),
+          "Privacy": safeExcelStr(privacy)
         };
       });
 
@@ -1020,11 +1038,20 @@ export default function AdminPanel({
         { wch: 10 }  // Privacy
       ];
 
+      // Double safety guard: ensure NO cell in worksheet exceeds 32,000 characters
+      Object.keys(worksheet).forEach((cellKey) => {
+        if (cellKey.startsWith("!")) return;
+        const cell = worksheet[cellKey];
+        if (cell && cell.t === "s" && typeof cell.v === "string" && cell.v.length > 32000) {
+          cell.v = cell.v.slice(0, 32000);
+        }
+      });
+
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Videos");
 
       let fileTypeLabel = "all";
-      if (exportIncludeStorage && !exportIncludeLinks) fileTypeLabel = "storage_server";
+      if (exportIncludeStorage && !exportIncludeLinks) fileTypeLabel = "r2_storage";
       if (!exportIncludeStorage && exportIncludeLinks) fileTypeLabel = "external_links";
 
       const now = new Date();
@@ -3736,7 +3763,7 @@ export default function AdminPanel({
                     setExportIncludeLinks(false);
                   }}
                 >
-                  Storage Server Only
+                  Cloudflare R2 Only
                 </button>
                 <button
                   type="button"
@@ -3752,7 +3779,7 @@ export default function AdminPanel({
 
               {/* Selection Cards with Checkboxes */}
               <div className="vap-export-card-group">
-                {/* 1. Storage Server Card */}
+                {/* 1. Cloudflare R2 Storage Card */}
                 <div
                   className={`vap-export-card ${exportIncludeStorage ? "selected" : ""}`}
                   onClick={() => setExportIncludeStorage(!exportIncludeStorage)}
@@ -3763,14 +3790,14 @@ export default function AdminPanel({
                   <div className="vap-export-card-content">
                     <div className="vap-export-card-title-row">
                       <span className="vap-export-card-title">
-                        Mere Storage Server Ki Videos
+                        Mera Cloudflare R2 Storage
                       </span>
                       <span className="vap-export-card-pill">
-                        Cloudflare R2 / Server CDN
+                        Cloudflare R2 Bucket
                       </span>
                     </div>
                     <p className="vap-export-card-desc">
-                      Wo saari videos jo aapke server storage ya Cloudflare R2 bucket me uploaded hain (/cdn/, vcdn).
+                      Wo saari videos jo aapke Cloudflare R2 bucket me uploaded hain (/cdn/, r2.dev).
                     </p>
                   </div>
                 </div>
@@ -3793,7 +3820,7 @@ export default function AdminPanel({
                       </span>
                     </div>
                     <p className="vap-export-card-desc">
-                      Wo saari videos jo external direct URLs ya embedded links ke zariye chal rahi hain.
+                      Wo saari videos jo external direct URLs ya third-party links ke zariye chal rahi hain.
                     </p>
                   </div>
                 </div>
