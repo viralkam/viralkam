@@ -564,12 +564,25 @@ export default function AdminPanel({
 
   // Sync external Other PS video(s) to Cloudflare R2
   const handleSyncOtherPsVideos = async (targetIds = null) => {
-    const idsToSync = Array.isArray(targetIds)
+    const rawIds = Array.isArray(targetIds)
       ? targetIds
       : (targetIds ? [targetIds] : selectedOtherPsIds);
 
-    if (!idsToSync || idsToSync.length === 0) {
+    if (!rawIds || rawIds.length === 0) {
       showError("Kripya kam se kam 1 video select karein sync karne ke liye.");
+      return;
+    }
+
+    // Filter out already synced videos so we never re-sync already saved videos
+    const allVids = getAllCurrentVideos();
+    const idsToSync = rawIds.filter((id) => {
+      const v = allVids.find((item) => String(item.id) === String(id));
+      return v && !isOtherPsSynced(v);
+    });
+
+    if (idsToSync.length === 0) {
+      showSuccess("Ye video(s) pehle se hi hamare server storage par saved/synced hain.");
+      setSelectedOtherPsIds([]);
       return;
     }
 
@@ -5468,10 +5481,10 @@ export default function AdminPanel({
                   <div className="vap-stat-icon" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6" }}>
                     <HardDrive size={22} />
                   </div>
-                  <div className="vap-stat-info">
+                  <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
                     <span className="vap-stat-label">Total Other PS Videos</span>
-                    <span className="vap-stat-value">{totalOtherPsCount}</span>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>External / friend links</span>
+                    <span className="vap-stat-value" style={{ display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{totalOtherPsCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>External / friend links</span>
                   </div>
                 </div>
 
@@ -5480,10 +5493,10 @@ export default function AdminPanel({
                   <div className="vap-stat-icon" style={{ background: "rgba(22, 163, 74, 0.12)", color: "#16a34a" }}>
                     <CheckCircle2 size={22} />
                   </div>
-                  <div className="vap-stat-info">
+                  <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
                     <span className="vap-stat-label">Synced in Our Server (R2)</span>
-                    <span className="vap-stat-value" style={{ color: "#16a34a" }}>{syncedOtherPsCount}</span>
-                    <span style={{ fontSize: "0.75rem", color: "#16a34a", fontWeight: 600 }}>
+                    <span className="vap-stat-value" style={{ color: "#16a34a", display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{syncedOtherPsCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#16a34a", fontWeight: 600, marginTop: "2px" }}>
                       {Math.round((syncedOtherPsCount / (totalOtherPsCount || 1)) * 100)}% Safe & Protected
                     </span>
                   </div>
@@ -5494,12 +5507,12 @@ export default function AdminPanel({
                   <div className="vap-stat-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "#f59e0b" }}>
                     <AlertCircle size={22} />
                   </div>
-                  <div className="vap-stat-info">
+                  <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
                     <span className="vap-stat-label">Pending Sync (Friend Only)</span>
-                    <span className="vap-stat-value" style={{ color: pendingOtherPsCount > 0 ? "#f59e0b" : "#64748b" }}>
+                    <span className="vap-stat-value" style={{ color: pendingOtherPsCount > 0 ? "#f59e0b" : "#64748b", display: "block", fontSize: "1.5rem", fontWeight: 800 }}>
                       {pendingOtherPsCount}
                     </span>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>
                       {pendingOtherPsCount > 0 ? "⚠️ At risk if friend link dies" : "✓ All synced!"}
                     </span>
                   </div>
@@ -5510,14 +5523,14 @@ export default function AdminPanel({
                   <div className="vap-stat-icon" style={{ background: "rgba(139, 92, 246, 0.12)", color: "#8b5cf6" }}>
                     <Server size={22} />
                   </div>
-                  <div className="vap-stat-info">
+                  <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
                     <span className="vap-stat-label">Active Stream Source</span>
-                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "2px" }}>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "4px" }}>
                       <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#2563eb" }}>☁️ {ourServerStreamCount} Our</span>
                       <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>|</span>
                       <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#7c3aed" }}>🔗 {otherPsStreamCount} Other</span>
                     </div>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Live streaming split</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>Live streaming split</span>
                   </div>
                 </div>
               </div>
@@ -5900,17 +5913,23 @@ export default function AdminPanel({
                                       <span>Sync to Storage</span>
                                     </button>
                                   ) : (
-                                    <button
-                                      type="button"
-                                      className="vap-btn-secondary"
-                                      onClick={() => handleSyncOtherPsVideos(v.id)}
-                                      disabled={isSyncingStorage}
-                                      style={{ padding: "5px 10px", fontSize: "0.78rem", display: "flex", alignItems: "center", gap: "4px" }}
-                                      title="Re-download and refresh R2 storage copy"
+                                    <span
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "4px",
+                                        color: "#16a34a",
+                                        fontWeight: 600,
+                                        fontSize: "0.78rem",
+                                        padding: "4px 8px",
+                                        background: "#dcfce7",
+                                        borderRadius: "6px"
+                                      }}
+                                      title="File is permanently saved in Cloudflare R2 storage"
                                     >
-                                      <RefreshCw size={13} />
-                                      <span>Re-sync</span>
-                                    </button>
+                                      <CheckCircle2 size={13} />
+                                      <span>Synced</span>
+                                    </span>
                                   )}
 
                                   <button

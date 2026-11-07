@@ -1084,6 +1084,69 @@ export default {
         }
       }
 
+      // Helper function to guarantee thumbnail is stored in R2 (thumbnails/ folder)
+      async function ensureThumbnailOnR2(thumbnail, id, env) {
+        if (!thumbnail || !env.BUCKET) return thumbnail;
+        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkaam.com';
+
+        // If thumbnail is already saved in our R2 bucket or on our CDN, never re-generate or re-download!
+        if (
+          thumbnail.includes(cdnDomain) ||
+          thumbnail.includes('/cdn/thumbnails/') ||
+          thumbnail.includes('thumbnails/') ||
+          thumbnail.includes('r2.dev/thumbnails/')
+        ) {
+          return thumbnail;
+        }
+
+        // Handle Base64 Data URI
+        if (thumbnail.startsWith('data:image/')) {
+          try {
+            const match = thumbnail.match(/^data:(image\/[a-zA-Z0-9\+\-]+);base64,(.+)$/);
+            if (match) {
+              const mime = match[1];
+              const b64 = match[2];
+              const ext = mime.includes('png') ? '.png' : mime.includes('webp') ? '.webp' : '.jpg';
+              const binStr = atob(b64);
+              const len = binStr.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) {
+                bytes[i] = binStr.charCodeAt(i);
+              }
+              const thumbKey = `thumbnails/${Date.now()}-${id}${ext}`;
+              await env.BUCKET.put(thumbKey, bytes.buffer, {
+                httpMetadata: { contentType: mime }
+              });
+              return `https://${cdnDomain}/${thumbKey}`;
+            }
+          } catch (err) {
+            console.warn('[Thumbnail R2] Error saving base64 to R2:', err.message);
+          }
+        }
+
+        // Handle External HTTP / HTTPS link
+        if (thumbnail.startsWith('http://') || thumbnail.startsWith('https://')) {
+          try {
+            const tRes = await fetch(thumbnail, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            if (tRes.ok && tRes.body) {
+              const cType = tRes.headers.get('content-type') || 'image/jpeg';
+              const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
+              const thumbKey = `thumbnails/${Date.now()}-${id}${ext}`;
+              await env.BUCKET.put(thumbKey, tRes.body, {
+                httpMetadata: { contentType: cType }
+              });
+              return `https://${cdnDomain}/${thumbKey}`;
+            }
+          } catch (err) {
+            console.warn('[Thumbnail R2] Error streaming external thumbnail to R2:', err.message);
+          }
+        }
+
+        return thumbnail;
+      }
+
       // Helper function to sync a single video to Cloudflare R2
       async function syncSingleVideoToR2(video, env) {
         if (!video || !env.BUCKET) return video;
@@ -1100,7 +1163,7 @@ export default {
         let finalVideoUrl = video.our_server_url || '';
         let finalThumbnail = video.thumbnail || '';
 
-        // 1. Stream video to R2
+        // 1. Stream video to R2 (videos/ folder)
         if (currentUrl && (currentUrl.startsWith('http://') || currentUrl.startsWith('https://')) && !alreadyOnServer) {
           try {
             const res = await fetch(currentUrl, {
@@ -1120,25 +1183,8 @@ export default {
           }
         }
 
-        // 2. Stream thumbnail to R2 if external
-        if (finalThumbnail && (finalThumbnail.startsWith('http://') || finalThumbnail.startsWith('https://')) && !finalThumbnail.includes(cdnDomain) && !finalThumbnail.includes('/cdn/')) {
-          try {
-            const tRes = await fetch(finalThumbnail, {
-              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-            });
-            if (tRes.ok && tRes.body) {
-              const cType = tRes.headers.get('content-type') || 'image/jpeg';
-              const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
-              const thumbKey = `thumbnails/${Date.now()}-${id}${ext}`;
-              await env.BUCKET.put(thumbKey, tRes.body, {
-                httpMetadata: { contentType: cType }
-              });
-              finalThumbnail = `https://${cdnDomain}/${thumbKey}`;
-            }
-          } catch (err) {
-            console.warn('[Sync R2] Error streaming thumbnail:', err.message);
-          }
-        }
+        // 2. Stream thumbnail to R2 only if NOT already on our server (never regenerate if already in R2!)
+        finalThumbnail = await ensureThumbnailOnR2(finalThumbnail, id, env);
 
         if (finalVideoUrl) {
           const originalExternalUrl = video.other_ps_url || currentUrl;
@@ -1294,7 +1340,10 @@ export default {
         let finalVideoUrl = body.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4';
         let finalThumbnail = body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80';
 
-        // Save in Server: If saveToServer is enabled, download & host remote video & thumbnail directly in Cloudflare R2!
+        // 1. Guaranteed: Thumbnail is ALWAYS stored in R2 thumbnails/ folder (whether video saveToServer is ON or OFF!)
+        finalThumbnail = await ensureThumbnailOnR2(finalThumbnail, id, env);
+
+        // 2. Video storage: Only streamed to R2 videos/ folder if body.saveToServer is enabled
         if (body.saveToServer && env.BUCKET) {
           if (finalVideoUrl && (finalVideoUrl.startsWith('http://') || finalVideoUrl.startsWith('https://')) && !finalVideoUrl.includes('/cdn/') && !finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam')) {
             try {
@@ -1313,26 +1362,6 @@ export default {
               }
             } catch (err) {
               console.warn('[R2 Save] Could not stream video to R2:', err.message);
-            }
-          }
-
-          if (finalThumbnail && (finalThumbnail.startsWith('http://') || finalThumbnail.startsWith('https://')) && !finalThumbnail.includes('/cdn/') && !finalThumbnail.includes(env.CDN_DOMAIN || 'viralkaam')) {
-            try {
-              const remoteThumb = await fetch(finalThumbnail, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-              });
-              if (remoteThumb.ok && remoteThumb.body) {
-                const cType = remoteThumb.headers.get('content-type') || 'image/jpeg';
-                const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
-                const thumbKey = `thumbnails/${Date.now()}-${id}${ext}`;
-                await env.BUCKET.put(thumbKey, remoteThumb.body, {
-                  httpMetadata: { contentType: cType }
-                });
-                const edgeCdn = env.CDN_DOMAIN ? `https://${env.CDN_DOMAIN}/${thumbKey}` : `/cdn/${thumbKey}`;
-                finalThumbnail = edgeCdn;
-              }
-            } catch (err) {
-              console.warn('[R2 Save] Could not stream thumbnail to R2:', err.message);
             }
           }
         }
@@ -1469,7 +1498,9 @@ export default {
         const rawFileName = request.headers.get('X-File-Name') || `upload-${Date.now()}.mp4`;
         const filename = decodeURIComponent(rawFileName).replace(/[^a-zA-Z0-9._-]/g, '_');
         const contentType = request.headers.get('Content-Type') || 'video/mp4';
-        const fileKey = `videos/${Date.now()}-${filename}`;
+        const isImage = contentType.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(filename);
+        const folder = isImage ? 'thumbnails' : 'videos';
+        const fileKey = `${folder}/${Date.now()}-${filename}`;
 
         // Stream into Cloudflare R2 Bucket
         await env.BUCKET.put(fileKey, request.body, {
@@ -1478,17 +1509,15 @@ export default {
 
         // Default to worker edge CDN endpoint to ensure immediate 100% working stream
         const edgeCdnUrl = `${url.origin}/cdn/${fileKey}`;
-        const cdnDomain = env.CDN_DOMAIN;
-        const publicUrl = (cdnDomain && !cdnDomain.includes('vcdn.viralkaam.com') && !cdnDomain.includes('vcdn.viralkam.com') && !cdnDomain.includes('yourdomain'))
-          ? `https://${cdnDomain}/${fileKey}`
-          : edgeCdnUrl;
+        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkaam.com';
+        const publicUrl = `https://${cdnDomain}/${fileKey}`;
 
         return json({
           success: true,
           key: fileKey,
           url: publicUrl,
           cdnUrl: edgeCdnUrl,
-          message: 'Video file uploaded successfully to Cloudflare R2 Storage'
+          message: `${isImage ? 'Thumbnail' : 'Video'} file uploaded successfully to Cloudflare R2 Storage (${folder}/)`
         });
       }
 
