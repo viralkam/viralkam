@@ -87,6 +87,21 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_tags_slug ON tags(slug);
   `);
+
+  const info = db.prepare("PRAGMA table_info(videos)").all();
+  const existingCols = new Set((info || []).map(r => r.name.toLowerCase()));
+  const colsToAdd = [
+    { name: 'our_server_url', sql: "ALTER TABLE videos ADD COLUMN our_server_url TEXT" },
+    { name: 'other_ps_url', sql: "ALTER TABLE videos ADD COLUMN other_ps_url TEXT" },
+    { name: 'backup_url', sql: "ALTER TABLE videos ADD COLUMN backup_url TEXT" },
+    { name: 'active_source', sql: "ALTER TABLE videos ADD COLUMN active_source TEXT DEFAULT 'our_server'" },
+    { name: 'storage_source', sql: "ALTER TABLE videos ADD COLUMN storage_source TEXT DEFAULT 'other_ps'" }
+  ];
+  for (const c of colsToAdd) {
+    if (!existingCols.has(c.name)) {
+      try { db.exec(c.sql); } catch {}
+    }
+  }
 } catch {}
 
 // Helper to set CORS & JSON headers
@@ -935,6 +950,121 @@ const server = http.createServer(async (req, res) => {
         success: true,
         message: 'Video updated successfully',
         video: formatVideo(updated)
+      });
+    }
+
+    // 4.5 POST /api/videos/sync-storage
+    if (pathname === '/api/videos/sync-storage' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+      if (ids.length === 0) return sendJson(res, 400, { success: false, message: 'No video IDs provided' });
+
+      const uploadsDir = path.join(__dirname, 'uploads');
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+      const host = req.headers.host || `localhost:${PORT}`;
+
+      const results = [];
+      for (const id of ids) {
+        const vid = db.prepare('SELECT * FROM videos WHERE id = ?').get(id);
+        if (vid) {
+          const currentUrl = (vid.other_ps_url || vid.videoUrl || '').trim();
+          let finalVideoUrl = vid.our_server_url || '';
+          if (currentUrl && (currentUrl.startsWith('http://') || currentUrl.startsWith('https://')) && !currentUrl.includes('/uploads/')) {
+            try {
+              const vidRes = await fetch(currentUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+              });
+              if (vidRes.ok) {
+                const buffer = Buffer.from(await vidRes.arrayBuffer());
+                const cType = vidRes.headers.get('content-type') || '';
+                const ext = cType.includes('webm') ? '.webm' : '.mp4';
+                const filename = `sync-${Date.now()}-${id}${ext}`;
+                const filePath = path.join(uploadsDir, filename);
+                fs.writeFileSync(filePath, buffer);
+                finalVideoUrl = `http://${host}/uploads/${filename}`;
+              }
+            } catch (err) {
+              console.warn('[Sync Local] Download error:', err.message);
+            }
+          }
+
+          if (finalVideoUrl) {
+            const originalUrl = vid.other_ps_url || currentUrl;
+            db.prepare(`
+              UPDATE videos SET
+                our_server_url = ?,
+                other_ps_url = ?,
+                backup_url = ?,
+                videoUrl = ?,
+                storage_source = 'our_server',
+                active_source = 'our_server',
+                updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).run(finalVideoUrl, originalUrl, originalUrl, finalVideoUrl, id);
+            results.push(formatVideo(db.prepare('SELECT * FROM videos WHERE id = ?').get(id)));
+          }
+        }
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        message: `Successfully synced ${results.length} video(s) to Server Storage!`,
+        results
+      });
+    }
+
+    // 4.6 POST /api/videos/switch-source
+    if (pathname === '/api/videos/switch-source' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const targetSource = body.source === 'other_ps' ? 'other_ps' : 'our_server';
+      const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+      const switchAll = Boolean(body.all);
+
+      if (switchAll) {
+        if (targetSource === 'our_server') {
+          db.prepare(`
+            UPDATE videos 
+            SET 
+              videoUrl = COALESCE(our_server_url, videoUrl),
+              backup_url = other_ps_url,
+              active_source = 'our_server'
+            WHERE our_server_url IS NOT NULL AND our_server_url != ''
+          `).run();
+        } else {
+          db.prepare(`
+            UPDATE videos 
+            SET 
+              videoUrl = COALESCE(other_ps_url, videoUrl),
+              backup_url = our_server_url,
+              active_source = 'other_ps'
+            WHERE other_ps_url IS NOT NULL AND other_ps_url != ''
+          `).run();
+        }
+        return sendJson(res, 200, {
+          success: true,
+          message: `All eligible videos switched to stream from ${targetSource === 'our_server' ? 'Our Server' : 'Other PS'}`
+        });
+      }
+
+      for (const id of ids) {
+        const vid = db.prepare('SELECT * FROM videos WHERE id = ?').get(id);
+        if (vid) {
+          if (targetSource === 'our_server' && vid.our_server_url) {
+            db.prepare(`
+              UPDATE videos SET videoUrl = ?, backup_url = ?, active_source = 'our_server' WHERE id = ?
+            `).run(vid.our_server_url, vid.other_ps_url || vid.videoUrl, id);
+          } else if (targetSource === 'other_ps' && (vid.other_ps_url || vid.backup_url)) {
+            const otherUrl = vid.other_ps_url || vid.backup_url;
+            db.prepare(`
+              UPDATE videos SET videoUrl = ?, backup_url = ?, active_source = 'other_ps' WHERE id = ?
+            `).run(otherUrl, vid.our_server_url || vid.videoUrl, id);
+          }
+        }
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        message: `Switched ${ids.length} video(s) to stream from ${targetSource === 'our_server' ? 'Our Server' : 'Other PS'}`
       });
     }
 

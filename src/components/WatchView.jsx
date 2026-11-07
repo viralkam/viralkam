@@ -81,6 +81,19 @@ export default function WatchView({
 
   const cleanTitle = cleanDisplayTitle(video.title);
   const cleanUrl = cleanVideoUrl(video.videoUrl);
+  const backupUrl = video.backup_url ? cleanVideoUrl(video.backup_url) : null;
+  const playerSources = [
+    {
+      src: cleanUrl,
+      type: cleanUrl && cleanUrl.includes(".m3u8") ? "application/x-mpegURL" : "video/mp4"
+    }
+  ];
+  if (backupUrl && backupUrl !== cleanUrl) {
+    playerSources.push({
+      src: backupUrl,
+      type: backupUrl.includes(".m3u8") ? "application/x-mpegURL" : "video/mp4"
+    });
+  }
 
   const playerOptions = {
     autoplay: false,
@@ -88,12 +101,7 @@ export default function WatchView({
     responsive: true,
     fill: true,
     poster: video.thumbnail || FALLBACK_THUMBNAIL,
-    sources: [
-      {
-        src: cleanUrl,
-        type: cleanUrl && cleanUrl.includes(".m3u8") ? "application/x-mpegURL" : "video/mp4"
-      }
-    ]
+    sources: playerSources
   };
 
   // Detect if video is an iframe embed (Streamtape, Dood, Vidhide, etc.)

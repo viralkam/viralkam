@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS videos (
   privacy TEXT DEFAULT 'public',
   initial_views INTEGER DEFAULT 0,
   initial_likes INTEGER DEFAULT 0,
+  our_server_url TEXT,
+  other_ps_url TEXT,
+  backup_url TEXT,
+  active_source TEXT DEFAULT 'our_server',
+  storage_source TEXT DEFAULT 'other_ps',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

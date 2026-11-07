@@ -240,6 +240,47 @@ export const api = {
   },
 
   /**
+   * Sync external (Other PS) video(s) to our Server Storage (Cloudflare R2)
+   */
+  async syncStorageVideos(ids) {
+    const token = this.getAdminToken();
+    const idList = Array.isArray(ids) ? ids : [ids];
+    const res = await fetch(`${API_BASE}/videos/sync-storage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ ids: idList })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Failed to sync storage (HTTP ${res.status})`);
+    }
+    return await res.json();
+  },
+
+  /**
+   * Switch streaming source (Our Server vs Other PS) for videos
+   */
+  async switchVideoSource(payload) {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/videos/switch-source`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Failed to switch source (HTTP ${res.status})`);
+    }
+    return await res.json();
+  },
+
+  /**
    * Delete video (Admin)
    */
   async deleteVideo(id) {

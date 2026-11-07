@@ -925,6 +925,11 @@ export default {
             initial_likes = ?,
             uploadedAt = COALESCE(?, uploadedAt),
             created_at = COALESCE(?, created_at),
+            our_server_url = COALESCE(?, our_server_url),
+            other_ps_url = COALESCE(?, other_ps_url),
+            backup_url = COALESCE(?, backup_url),
+            active_source = COALESCE(?, active_source),
+            storage_source = COALESCE(?, storage_source),
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).bind(
@@ -943,6 +948,11 @@ export default {
           likesToSet,
           body.uploadedAt !== undefined ? body.uploadedAt : null,
           body.created_at !== undefined ? body.created_at : null,
+          body.our_server_url !== undefined ? body.our_server_url : null,
+          body.other_ps_url !== undefined ? body.other_ps_url : null,
+          body.backup_url !== undefined ? body.backup_url : null,
+          body.active_source !== undefined ? body.active_source : null,
+          body.storage_source !== undefined ? body.storage_source : null,
           id
         ).run();
 
@@ -1024,6 +1034,11 @@ export default {
             { name: 'privacy', sql: "ALTER TABLE videos ADD COLUMN privacy TEXT DEFAULT 'public'" },
             { name: 'initial_views', sql: "ALTER TABLE videos ADD COLUMN initial_views INTEGER DEFAULT 0" },
             { name: 'initial_likes', sql: "ALTER TABLE videos ADD COLUMN initial_likes INTEGER DEFAULT 0" },
+            { name: 'our_server_url', sql: "ALTER TABLE videos ADD COLUMN our_server_url TEXT" },
+            { name: 'other_ps_url', sql: "ALTER TABLE videos ADD COLUMN other_ps_url TEXT" },
+            { name: 'backup_url', sql: "ALTER TABLE videos ADD COLUMN backup_url TEXT" },
+            { name: 'active_source', sql: "ALTER TABLE videos ADD COLUMN active_source TEXT DEFAULT 'our_server'" },
+            { name: 'storage_source', sql: "ALTER TABLE videos ADD COLUMN storage_source TEXT DEFAULT 'other_ps'" },
             { name: 'created_at', sql: "ALTER TABLE videos ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP" },
             { name: 'updated_at', sql: "ALTER TABLE videos ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP" }
           ];
@@ -1035,9 +1050,200 @@ export default {
               } catch {}
             }
           }
+
+          // Auto-classify existing legacy records if our_server_url and other_ps_url are not set yet
+          try {
+            await db.prepare(`
+              UPDATE videos 
+              SET 
+                our_server_url = CASE 
+                  WHEN (videoUrl LIKE '%/cdn/%' OR videoUrl LIKE '%r2.dev%' OR videoUrl LIKE '%/uploads/%' OR videoUrl LIKE '%viralkaam%' OR videoUrl LIKE '%viralkam%') 
+                  THEN videoUrl 
+                  ELSE our_server_url 
+                END,
+                other_ps_url = CASE 
+                  WHEN NOT (videoUrl LIKE '%/cdn/%' OR videoUrl LIKE '%r2.dev%' OR videoUrl LIKE '%/uploads/%' OR videoUrl LIKE '%viralkaam%' OR videoUrl LIKE '%viralkam%') 
+                  THEN videoUrl 
+                  ELSE other_ps_url 
+                END,
+                storage_source = CASE 
+                  WHEN (videoUrl LIKE '%/cdn/%' OR videoUrl LIKE '%r2.dev%' OR videoUrl LIKE '%/uploads/%' OR videoUrl LIKE '%viralkaam%' OR videoUrl LIKE '%viralkam%') 
+                  THEN 'our_server' 
+                  ELSE 'other_ps' 
+                END,
+                active_source = CASE 
+                  WHEN (videoUrl LIKE '%/cdn/%' OR videoUrl LIKE '%r2.dev%' OR videoUrl LIKE '%/uploads/%' OR videoUrl LIKE '%viralkaam%' OR videoUrl LIKE '%viralkam%') 
+                  THEN 'our_server' 
+                  ELSE 'other_ps' 
+                END
+              WHERE our_server_url IS NULL AND other_ps_url IS NULL
+            `).run();
+          } catch {}
         } catch (err) {
           console.warn('[D1 Migration] Schema check note:', err.message);
         }
+      }
+
+      // Helper function to sync a single video to Cloudflare R2
+      async function syncSingleVideoToR2(video, env) {
+        if (!video || !env.BUCKET) return video;
+        const id = video.id;
+        const currentUrl = (video.other_ps_url || video.videoUrl || '').trim();
+        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkaam.com';
+
+        // Check if already on our server
+        const alreadyOnServer = currentUrl.includes(cdnDomain) || currentUrl.includes('/cdn/') || currentUrl.includes('r2.dev');
+        if (alreadyOnServer && video.our_server_url) {
+          return video;
+        }
+
+        let finalVideoUrl = video.our_server_url || '';
+        let finalThumbnail = video.thumbnail || '';
+
+        // 1. Stream video to R2
+        if (currentUrl && (currentUrl.startsWith('http://') || currentUrl.startsWith('https://')) && !alreadyOnServer) {
+          try {
+            const res = await fetch(currentUrl, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            if (res.ok && res.body) {
+              const cType = res.headers.get('content-type') || 'video/mp4';
+              const ext = cType.includes('webm') ? '.webm' : '.mp4';
+              const fileKey = `videos/${Date.now()}-${id}${ext}`;
+              await env.BUCKET.put(fileKey, res.body, {
+                httpMetadata: { contentType: cType }
+              });
+              finalVideoUrl = `https://${cdnDomain}/${fileKey}`;
+            }
+          } catch (err) {
+            console.warn('[Sync R2] Error streaming video:', err.message);
+          }
+        }
+
+        // 2. Stream thumbnail to R2 if external
+        if (finalThumbnail && (finalThumbnail.startsWith('http://') || finalThumbnail.startsWith('https://')) && !finalThumbnail.includes(cdnDomain) && !finalThumbnail.includes('/cdn/')) {
+          try {
+            const tRes = await fetch(finalThumbnail, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            if (tRes.ok && tRes.body) {
+              const cType = tRes.headers.get('content-type') || 'image/jpeg';
+              const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
+              const thumbKey = `thumbnails/${Date.now()}-${id}${ext}`;
+              await env.BUCKET.put(thumbKey, tRes.body, {
+                httpMetadata: { contentType: cType }
+              });
+              finalThumbnail = `https://${cdnDomain}/${thumbKey}`;
+            }
+          } catch (err) {
+            console.warn('[Sync R2] Error streaming thumbnail:', err.message);
+          }
+        }
+
+        if (finalVideoUrl) {
+          const originalExternalUrl = video.other_ps_url || currentUrl;
+          await env.DB.prepare(`
+            UPDATE videos SET
+              our_server_url = ?,
+              other_ps_url = ?,
+              backup_url = ?,
+              videoUrl = ?,
+              thumbnail = ?,
+              storage_source = 'our_server',
+              active_source = 'our_server',
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(
+            finalVideoUrl,
+            originalExternalUrl,
+            originalExternalUrl,
+            finalVideoUrl,
+            finalThumbnail,
+            id
+          ).run();
+
+          return await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
+        }
+
+        return video;
+      }
+
+      // 4.5 POST /api/videos/sync-storage (Sync Other PS videos into Cloudflare R2 Server Storage)
+      if (pathname === '/api/videos/sync-storage' && method === 'POST') {
+        await ensureD1Columns(env.DB);
+        const body = await request.json().catch(() => ({}));
+        const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+        if (ids.length === 0) return json({ success: false, message: 'No video IDs provided' }, 400);
+
+        const results = [];
+        for (const id of ids) {
+          const vid = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
+          if (vid) {
+            const synced = await syncSingleVideoToR2(vid, env);
+            results.push(synced);
+          }
+        }
+
+        return json({
+          success: true,
+          message: `Successfully synced ${results.length} video(s) to Server Storage (Cloudflare R2)!`,
+          results
+        });
+      }
+
+      // 4.6 POST /api/videos/switch-source (1-click active source toggle between Our Server & Other PS)
+      if (pathname === '/api/videos/switch-source' && method === 'POST') {
+        await ensureD1Columns(env.DB);
+        const body = await request.json().catch(() => ({}));
+        const targetSource = body.source === 'other_ps' ? 'other_ps' : 'our_server';
+        const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+        const switchAll = Boolean(body.all);
+
+        if (switchAll) {
+          if (targetSource === 'our_server') {
+            await env.DB.prepare(`
+              UPDATE videos 
+              SET 
+                videoUrl = COALESCE(our_server_url, videoUrl),
+                backup_url = other_ps_url,
+                active_source = 'our_server'
+              WHERE our_server_url IS NOT NULL AND our_server_url != ''
+            `).run();
+          } else {
+            await env.DB.prepare(`
+              UPDATE videos 
+              SET 
+                videoUrl = COALESCE(other_ps_url, videoUrl),
+                backup_url = our_server_url,
+                active_source = 'other_ps'
+              WHERE other_ps_url IS NOT NULL AND other_ps_url != ''
+            `).run();
+          }
+          return json({ success: true, message: `All eligible videos switched to stream from ${targetSource === 'our_server' ? 'Our Server Storage' : 'Other Person Storage (Other PS)'}` });
+        }
+
+        if (ids.length === 0) return json({ success: false, message: 'No video IDs provided' }, 400);
+
+        for (const id of ids) {
+          const vid = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
+          if (vid) {
+            if (targetSource === 'our_server' && vid.our_server_url) {
+              await env.DB.prepare(`
+                UPDATE videos SET videoUrl = ?, backup_url = ?, active_source = 'our_server' WHERE id = ?
+              `).bind(vid.our_server_url, vid.other_ps_url || vid.videoUrl, id).run();
+            } else if (targetSource === 'other_ps' && (vid.other_ps_url || vid.backup_url)) {
+              const otherUrl = vid.other_ps_url || vid.backup_url;
+              await env.DB.prepare(`
+                UPDATE videos SET videoUrl = ?, backup_url = ?, active_source = 'other_ps' WHERE id = ?
+              `).bind(otherUrl, vid.our_server_url || vid.videoUrl, id).run();
+            }
+          }
+        }
+
+        return json({
+          success: true,
+          message: `Switched ${ids.length} video(s) to stream from ${targetSource === 'our_server' ? 'Our Server' : 'Other PS'}`
+        });
       }
 
       // 5. POST /api/videos (Publish new video)
@@ -1049,6 +1255,35 @@ export default {
 
         // Auto-heal D1 table schema if any columns are missing
         await ensureD1Columns(env.DB);
+
+        // Check if video link already exists in database
+        const incomingUrl = (body.videoUrl || '').trim();
+        if (incomingUrl) {
+          const existingVid = await env.DB.prepare(`
+            SELECT * FROM videos 
+            WHERE videoUrl = ? OR other_ps_url = ? OR our_server_url = ?
+            LIMIT 1
+          `).bind(incomingUrl, incomingUrl, incomingUrl).first();
+
+          if (existingVid) {
+            if (body.saveToServer && env.BUCKET && !existingVid.our_server_url) {
+              const synced = await syncSingleVideoToR2(existingVid, env);
+              return json({
+                success: true,
+                message: `Video already exists in database; synced to Server Storage! Our server link is now Primary.`,
+                video: synced,
+                isSyncedExisting: true
+              }, 200);
+            } else {
+              return json({
+                success: true,
+                message: `Video already exists in database as "${existingVid.title}".`,
+                video: existingVid,
+                isDuplicateExisting: true
+              }, 200);
+            }
+          }
+        }
 
         const id = body.id || `vid-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const privacy = (body.privacy || (body.status === 'private' ? 'private' : 'public')).toLowerCase();
@@ -1136,7 +1371,12 @@ export default {
           status,
           privacy,
           initial_views: initialViews,
-          initial_likes: initialLikes
+          initial_likes: initialLikes,
+          our_server_url: (body.saveToServer && env.BUCKET) || finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') || finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev') ? finalVideoUrl : null,
+          other_ps_url: (body.saveToServer && body.videoUrl && body.videoUrl !== finalVideoUrl) ? body.videoUrl : (!finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') && !finalVideoUrl.includes('/cdn/') && !finalVideoUrl.includes('r2.dev') ? finalVideoUrl : null),
+          backup_url: (body.saveToServer && body.videoUrl && body.videoUrl !== finalVideoUrl) ? body.videoUrl : null,
+          storage_source: (body.saveToServer && env.BUCKET) || finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') || finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev') ? 'our_server' : 'other_ps',
+          active_source: (body.saveToServer && env.BUCKET) || finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') || finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev') ? 'our_server' : 'other_ps'
         };
 
         if (body.created_at) {

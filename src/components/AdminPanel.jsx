@@ -31,7 +31,9 @@ import {
   RefreshCw,
   Camera,
   Calendar,
-  Clock
+  Clock,
+  HardDrive,
+  Copy
 } from "lucide-react";
 import { api } from "../services/api";
 import { uploadHistory } from "../services/uploadHistory";
@@ -238,6 +240,17 @@ export default function AdminPanel({
   const [editCurrentScrubTime, setEditCurrentScrubTime] = useState(0);
   const [isEditFetchingMeta, setIsEditFetchingMeta] = useState(false);
 
+  // Other PS (Other Person Storage) State
+  const [otherPsFilter, setOtherPsFilter] = useState("all");
+  const [selectedOtherPsIds, setSelectedOtherPsIds] = useState([]);
+  const [isSyncingStorage, setIsSyncingStorage] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [syncStepText, setSyncStepText] = useState("");
+  const [isSwitchingSource, setIsSwitchingSource] = useState(false);
+  const [otherPsSearch, setOtherPsSearch] = useState("");
+  const [otherPsStartDate, setOtherPsStartDate] = useState("");
+  const [otherPsEndDate, setOtherPsEndDate] = useState("");
+
   // Fetch Stats and Categories on load
   const loadStatsAndCategories = async () => {
     try {
@@ -312,7 +325,7 @@ export default function AdminPanel({
   };
 
   useEffect(() => {
-    if (activeNav === "export") {
+    if (activeNav === "export" || activeNav === "other_ps") {
       loadAllVideosForExport();
     }
   }, [activeNav]);
@@ -442,7 +455,13 @@ export default function AdminPanel({
       if (itemUrl.toLowerCase() === cleanTarget.toLowerCase()) {
         return item;
       }
-      if (ytId && itemUrl.includes(ytId)) {
+      if (item.other_ps_url && cleanVideoUrl(item.other_ps_url).toLowerCase() === cleanTarget.toLowerCase()) {
+        return item;
+      }
+      if (item.our_server_url && cleanVideoUrl(item.our_server_url).toLowerCase() === cleanTarget.toLowerCase()) {
+        return item;
+      }
+      if (ytId && (itemUrl.includes(ytId) || (item.other_ps_url && item.other_ps_url.includes(ytId)))) {
         return item;
       }
       try {
@@ -454,6 +473,206 @@ export default function AdminPanel({
       } catch {}
     }
     return null;
+  };
+
+  // Storage source classification helpers
+  const isVideoOnOurServer = (video) => {
+    if (!video) return false;
+    if (video.storage_source === "our_server") return true;
+    if (video.our_server_url && video.our_server_url.trim().length > 0) return true;
+    const url = (video.videoUrl || video.url || "").toLowerCase();
+    if (
+      url.includes("/cdn/") ||
+      url.includes("/uploads/") ||
+      url.includes("vcdn.viralkaam.com") ||
+      url.includes(".r2.dev") ||
+      url.includes("workers.dev/cdn")
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const isOtherPsVideo = (video) => {
+    if (!video) return false;
+    if (video.storage_source === "other_ps") return true;
+    if (video.other_ps_url && video.other_ps_url.trim().length > 0) return true;
+    return !isVideoOnOurServer(video);
+  };
+
+  const isOtherPsSynced = (video) => {
+    if (!video) return false;
+    if (video.our_server_url && video.our_server_url.trim().length > 0) return true;
+    if (video.storage_source === "our_server" && isVideoOnOurServer(video)) return true;
+    return false;
+  };
+
+  const getAllCurrentVideos = () => {
+    return allExportVideos.length > 0 ? allExportVideos : (videosList.length > 0 ? videosList : initialVideos);
+  };
+
+  const getOtherPsVideos = () => {
+    const list = getAllCurrentVideos();
+    return list.filter(isOtherPsVideo);
+  };
+
+  const getFilteredOtherPsVideos = () => {
+    let list = getOtherPsVideos();
+
+    if (otherPsSearch && otherPsSearch.trim()) {
+      const q = otherPsSearch.trim().toLowerCase();
+      list = list.filter((v) =>
+        (v.title && v.title.toLowerCase().includes(q)) ||
+        (v.category && v.category.toLowerCase().includes(q)) ||
+        (v.videoUrl && v.videoUrl.toLowerCase().includes(q))
+      );
+    }
+
+    if (otherPsStartDate) {
+      list = list.filter((v) => {
+        const d = getVideoDate(v);
+        if (!d) return true;
+        const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        return dStr >= otherPsStartDate;
+      });
+    }
+
+    if (otherPsEndDate) {
+      list = list.filter((v) => {
+        const d = getVideoDate(v);
+        if (!d) return true;
+        const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        return dStr <= otherPsEndDate;
+      });
+    }
+
+    if (otherPsFilter === "pending") {
+      return list.filter((v) => !isOtherPsSynced(v));
+    }
+    if (otherPsFilter === "synced") {
+      return list.filter((v) => isOtherPsSynced(v));
+    }
+    if (otherPsFilter === "active_our_server") {
+      return list.filter((v) => isOtherPsSynced(v) && (v.active_source || "our_server") === "our_server");
+    }
+    if (otherPsFilter === "active_other_ps") {
+      return list.filter((v) => v.active_source === "other_ps" || !isOtherPsSynced(v));
+    }
+
+    return list;
+  };
+
+  // Sync external Other PS video(s) to Cloudflare R2
+  const handleSyncOtherPsVideos = async (targetIds = null) => {
+    const idsToSync = Array.isArray(targetIds)
+      ? targetIds
+      : (targetIds ? [targetIds] : selectedOtherPsIds);
+
+    if (!idsToSync || idsToSync.length === 0) {
+      showError("Kripya kam se kam 1 video select karein sync karne ke liye.");
+      return;
+    }
+
+    const confirmMsg = idsToSync.length === 1
+      ? "Kya aap is video ko Hamare Server Storage (Cloudflare R2) me save/sync karna chahte hain?\n\nHamara server URL primary ban jayega aur original friend link secondary backup rahega."
+      : `Kya aap ${idsToSync.length} videos ko Hamare Server Storage (Cloudflare R2) me sync karna chahte hain?\n\nSabhi videos hamare server par stream hongi aur external links secondary backup ban jayenge.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsSyncingStorage(true);
+    setSyncProgress(10);
+    setSyncStepText(`Connecting to Cloudflare R2 sync service for ${idsToSync.length} video(s)...`);
+
+    try {
+      setSyncProgress(35);
+      setSyncStepText(`Downloading video stream and saving into Cloudflare R2 bucket...`);
+
+      const res = await api.syncStorageVideos(idsToSync);
+      setSyncProgress(85);
+      setSyncStepText(`Updating primary & secondary backup URLs in database...`);
+
+      if (res && res.success) {
+        setSyncProgress(100);
+        showSuccess(res.message || `✓ Successfully synced ${idsToSync.length} video(s) to Server Storage!`);
+        setSelectedOtherPsIds([]);
+        await loadVideos();
+        await loadAllVideosForExport();
+      } else {
+        showError(res?.message || "Sync me koi issue aaya.");
+      }
+    } catch (err) {
+      console.error("[Sync Error]:", err);
+      showError(err.message || "Server storage par sync fail ho gaya.");
+    } finally {
+      setIsSyncingStorage(false);
+      setSyncProgress(0);
+      setSyncStepText("");
+    }
+  };
+
+  // 1-Click active stream source switcher
+  const handleSwitchOtherPsSource = async (targetIds, targetSource, switchAll = false) => {
+    const isOurServer = targetSource === "our_server";
+    const label = isOurServer ? "Our Server Storage (Cloudflare R2)" : "Other Person Storage (Friend Server)";
+
+    let ids = [];
+    if (!switchAll) {
+      ids = Array.isArray(targetIds)
+        ? targetIds
+        : (targetIds ? [targetIds] : selectedOtherPsIds);
+      if (ids.length === 0) {
+        showError("Kripya source change karne ke liye video select karein.");
+        return;
+      }
+    }
+
+    const confirmMsg = switchAll
+      ? `Kya aap sabhi eligible videos ko ${label} se stream karna chahte hain?`
+      : `Kya aap ${ids.length} videos ko ${label} se stream karne ke liye switch karna chahte hain?`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsSwitchingSource(true);
+    try {
+      const res = await api.switchVideoSource({
+        ids: switchAll ? [] : ids,
+        source: targetSource,
+        all: switchAll
+      });
+
+      if (res && res.success) {
+        showSuccess(res.message || `✓ Playback source switched to ${label}!`);
+        setSelectedOtherPsIds([]);
+        await loadVideos();
+        await loadAllVideosForExport();
+      } else {
+        showError(res?.message || "Source switch karne me error aaya.");
+      }
+    } catch (err) {
+      console.error("[Switch Source Error]:", err);
+      showError(err.message || "Source switch fail ho gaya.");
+    } finally {
+      setIsSwitchingSource(false);
+    }
+  };
+
+  // Quick selection helpers
+  const handleSelectCount = (count) => {
+    const list = getFilteredOtherPsVideos();
+    const slice = list.slice(0, count);
+    setSelectedOtherPsIds(slice.map((v) => v.id));
+  };
+
+  const handleSelectAllPending = () => {
+    const list = getOtherPsVideos();
+    const pending = list.filter((v) => !isOtherPsSynced(v));
+    setSelectedOtherPsIds(pending.map((v) => v.id));
+  };
+
+  const handleSelectByDateRange = () => {
+    const list = getFilteredOtherPsVideos();
+    setSelectedOtherPsIds(list.map((v) => v.id));
+    showSuccess(`${list.length} videos selected matching date range.`);
   };
 
   // Capture video frame at current scrub time as thumbnail
@@ -752,8 +971,42 @@ export default function AdminPanel({
     if (!isLocalUpload && currentUrl) {
       const dup = checkDuplicateVideo(currentUrl);
       if (dup) {
-        const proceed = window.confirm(`⚠️ Notice: This video is already published as "${dup.title}".\n\nDo you still want to publish it again?`);
-        if (!proceed) return;
+        if (saveToServer) {
+          const proceed = window.confirm(
+            `⚡ Notice: This video is already in database as "${dup.title}".\n\n` +
+            `Since "Save in Server Storage" is ON, this video will be synced to Our Server Storage (Cloudflare R2) as Primary URL, keeping the original link as Backup.\n\n` +
+            `Proceed to Sync?`
+          );
+          if (!proceed) return;
+
+          setIsUploadingSingle(true);
+          setSingleUploadStep("Syncing existing video to Our Server Storage (Cloudflare R2)...");
+          try {
+            const syncRes = await api.syncStorageVideos([dup.id]);
+            if (syncRes && syncRes.success) {
+              showSuccess(`✓ Video "${dup.title}" synced to Server Storage! Primary URL updated.`);
+              await loadVideos();
+              await loadAllVideosForExport();
+              setSingleVideoUrl("");
+              setLinkUrl("");
+              return;
+            } else {
+              showError(syncRes?.message || "Failed to sync to server storage.");
+              return;
+            }
+          } catch (err) {
+            showError(err.message || "Failed to sync to server storage.");
+            return;
+          } finally {
+            setIsUploadingSingle(false);
+            setSingleUploadStep("");
+          }
+        } else {
+          const proceed = window.confirm(
+            `⚠️ Notice: This video is already published as "${dup.title}".\n\nDo you still want to publish it again?`
+          );
+          if (!proceed) return;
+        }
       }
     }
 
@@ -1408,12 +1661,9 @@ export default function AdminPanel({
 
     return sourceList.filter((v) => {
       // Storage vs External Link filter
-      const isStorageVideo = (v.videoUrl || "").includes("/cdn/") || 
-                             (v.videoUrl || "").includes("r2.dev") || 
-                             (v.videoUrl || "").includes("/uploads/") ||
-                             (v.videoUrl || "").includes("viralkaam");
-      if (!exportIncludeStorage && isStorageVideo) return false;
-      if (!exportIncludeLinks && !isStorageVideo) return false;
+      const isOurServer = isVideoOnOurServer(v);
+      if (exportIncludeStorage && !exportIncludeLinks && !isOurServer) return false;
+      if (!exportIncludeStorage && exportIncludeLinks && isOurServer) return false;
 
       // Category filter
       if (exportCategoryFilter !== "all" && (v.category || "General").toLowerCase() !== exportCategoryFilter.toLowerCase()) {
@@ -1549,6 +1799,11 @@ export default function AdminPanel({
         })();
 
         return {
+          "Storage Type": safeExcelStr(isVideoOnOurServer(v) ? "Our Server (R2)" : "Other Person Storage (External)"),
+          "Primary URL": safeExcelStr(v.videoUrl || ""),
+          "Secondary URL": safeExcelStr(v.backup_url || v.other_ps_url || ""),
+          "Active Source": safeExcelStr((v.active_source === "other_ps" || (!v.our_server_url && !isVideoOnOurServer(v))) ? "Other PS" : "Our Server"),
+          "Synced to Server": safeExcelStr((Boolean(v.our_server_url) || (v.storage_source === "our_server" && isVideoOnOurServer(v))) ? "YES" : "NO"),
           "Video URL": safeExcelStr(v.videoUrl || ""),
           "Thumbnail URL": safeThumbnail,
           "Title": safeExcelStr(cleanDisplayTitle(v.title || "")),
@@ -1566,6 +1821,11 @@ export default function AdminPanel({
 
       const worksheet = XLSX.utils.json_to_sheet(excelRows);
       worksheet["!cols"] = [
+        { wch: 25 }, // Storage Type
+        { wch: 45 }, // Primary URL
+        { wch: 45 }, // Secondary URL
+        { wch: 15 }, // Active Source
+        { wch: 16 }, // Synced to Server
         { wch: 45 }, // Video URL
         { wch: 45 }, // Thumbnail URL
         { wch: 30 }, // Title
@@ -2218,6 +2478,17 @@ export default function AdminPanel({
     }
   };
 
+  // Storage & Other PS statistics for sidebar & screens
+  const allCurrentList = getAllCurrentVideos();
+  const otherPsList = allCurrentList.filter(isOtherPsVideo);
+  const totalOtherPsCount = otherPsList.length;
+  const syncedOtherPsCount = otherPsList.filter(isOtherPsSynced).length;
+  const pendingOtherPsCount = otherPsList.filter((v) => !isOtherPsSynced(v)).length;
+  const ourServerStreamCount = otherPsList.filter((v) => isOtherPsSynced(v) && (v.active_source || "our_server") === "our_server").length;
+  const otherPsStreamCount = otherPsList.filter((v) => v.active_source === "other_ps" || !isOtherPsSynced(v)).length;
+  const ourServerOnlyCount = allCurrentList.filter(isVideoOnOurServer).length;
+  const otherPsOnlyCount = otherPsList.length;
+
   // Total pages calculation
   const totalPages = Math.max(1, Math.ceil(videosCount / videosLimit));
 
@@ -2280,6 +2551,46 @@ export default function AdminPanel({
                 {historyList.length}
               </span>
             )}
+          </button>
+
+          <button
+            className={`vap-nav-item ${activeNav === "other_ps" ? "active" : ""}`}
+            onClick={() => {
+              setActiveNav("other_ps");
+              loadAllVideosForExport();
+            }}
+          >
+            <HardDrive size={18} />
+            <span>Other PS</span>
+            {pendingOtherPsCount > 0 ? (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  background: "#f59e0b",
+                  color: "#000",
+                  borderRadius: "10px",
+                  padding: "1px 7px",
+                  fontSize: "0.72rem",
+                  fontWeight: 700
+                }}
+                title={`${pendingOtherPsCount} video(s) pending sync to server storage`}
+              >
+                {pendingOtherPsCount}
+              </span>
+            ) : totalOtherPsCount > 0 ? (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  background: "rgba(255, 255, 255, 0.16)",
+                  borderRadius: "10px",
+                  padding: "1px 7px",
+                  fontSize: "0.72rem",
+                  fontWeight: 600
+                }}
+              >
+                {totalOtherPsCount}
+              </span>
+            ) : null}
           </button>
 
           <button
@@ -4889,7 +5200,7 @@ export default function AdminPanel({
                 </h3>
 
                 {/* Storage Quick Presets */}
-                <div className="vap-export-presets" style={{ marginBottom: "16px" }}>
+                <div className="vap-export-presets" style={{ marginBottom: "16px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
                   <button
                     type="button"
                     className={`vap-export-preset-btn ${exportIncludeStorage && exportIncludeLinks ? "active" : ""}`}
@@ -4898,7 +5209,7 @@ export default function AdminPanel({
                       setExportIncludeLinks(true);
                     }}
                   >
-                    ✓ Sabhi Videos (All: {allExportVideos.length || videosCount})
+                    ✓ Sabhi Videos (All: {allCurrentList.length})
                   </button>
                   <button
                     type="button"
@@ -4908,7 +5219,7 @@ export default function AdminPanel({
                       setExportIncludeLinks(false);
                     }}
                   >
-                    ☁️ Cloudflare R2 / Server Storage Only
+                    ☁️ Our Server Only (R2) ({ourServerOnlyCount})
                   </button>
                   <button
                     type="button"
@@ -4918,7 +5229,7 @@ export default function AdminPanel({
                       setExportIncludeLinks(true);
                     }}
                   >
-                    🔗 External Direct Links Only
+                    🔗 Other Person Storage (Other PS) ({otherPsOnlyCount})
                   </button>
                 </div>
 
@@ -5069,6 +5380,568 @@ export default function AdminPanel({
               </div>
             </div>
           )}
+
+          {/* ========================================================
+              SCREEN 8: OTHER PERSON STORAGE (OTHER PS)
+              ======================================================== */}
+          {activeNav === "other_ps" && (
+            <div>
+              {/* Header */}
+              <div className="vap-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "14px" }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "rgba(59, 130, 246, 0.12)", display: "flex", alignItems: "center", justifyContent: "center", color: "#3b82f6" }}>
+                      <HardDrive size={22} />
+                    </div>
+                    <div>
+                      <h2 className="vap-page-title" style={{ margin: 0 }}>Other Person Storage (Other PS)</h2>
+                      <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.85rem" }}>
+                        Manage external & friend videos. Sync to Cloudflare R2 (Primary URL) to protect against dead links, or toggle active streaming source in 1 click.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick 1-Click Action Buttons */}
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="vap-btn-primary"
+                    disabled={isSyncingStorage || pendingOtherPsCount === 0}
+                    onClick={() => {
+                      const pending = otherPsList.filter((v) => !isOtherPsSynced(v));
+                      handleSyncOtherPsVideos(pending.map((v) => v.id));
+                    }}
+                    style={{ background: "#16a34a", padding: "9px 16px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}
+                    title="Sync all unsynced videos to Cloudflare R2 in 1 click"
+                  >
+                    <Zap size={15} />
+                    <span>Sync All Pending ({pendingOtherPsCount})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="vap-btn-secondary"
+                    disabled={isSwitchingSource || syncedOtherPsCount === 0}
+                    onClick={() => handleSwitchOtherPsSource(null, "our_server", true)}
+                    style={{ padding: "9px 14px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}
+                    title="Stream all eligible synced videos from Our Server (Fast & Reliable)"
+                  >
+                    <Server size={15} />
+                    <span>Stream All from Our Server</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="vap-btn-secondary"
+                    disabled={isSwitchingSource}
+                    onClick={() => handleSwitchOtherPsSource(null, "other_ps", true)}
+                    style={{ padding: "9px 14px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}
+                    title="Stream all videos from Friend's Server (Saves R2 bandwidth)"
+                  >
+                    <LinkIcon size={15} />
+                    <span>Stream All from Other PS</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* In-Flight Sync Banner */}
+              {isSyncingStorage && (
+                <div className="vap-card" style={{ marginBottom: "18px", border: "1px solid #3b82f6", background: "rgba(59, 130, 246, 0.05)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <Loader2 className="animate-spin" size={18} style={{ color: "#3b82f6" }} />
+                      <span style={{ fontWeight: 600, fontSize: "0.92rem", color: "#1e293b" }}>{syncStepText}</span>
+                    </div>
+                    <span style={{ fontWeight: 700, fontSize: "0.92rem", color: "#3b82f6" }}>{syncProgress}%</span>
+                  </div>
+                  <div style={{ width: "100%", height: "8px", background: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{ width: `${syncProgress}%`, height: "100%", background: "linear-gradient(90deg, #3b82f6, #10b981)", transition: "width 0.3s ease" }} />
+                  </div>
+                </div>
+              )}
+
+              {/* 4 Stat Cards */}
+              <div className="vap-stats-grid" style={{ marginBottom: "20px" }}>
+                {/* 1. Total Other PS */}
+                <div className="vap-stat-card">
+                  <div className="vap-stat-icon" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6" }}>
+                    <HardDrive size={22} />
+                  </div>
+                  <div className="vap-stat-info">
+                    <span className="vap-stat-label">Total Other PS Videos</span>
+                    <span className="vap-stat-value">{totalOtherPsCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>External / friend links</span>
+                  </div>
+                </div>
+
+                {/* 2. Synced in R2 */}
+                <div className="vap-stat-card">
+                  <div className="vap-stat-icon" style={{ background: "rgba(22, 163, 74, 0.12)", color: "#16a34a" }}>
+                    <CheckCircle2 size={22} />
+                  </div>
+                  <div className="vap-stat-info">
+                    <span className="vap-stat-label">Synced in Our Server (R2)</span>
+                    <span className="vap-stat-value" style={{ color: "#16a34a" }}>{syncedOtherPsCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#16a34a", fontWeight: 600 }}>
+                      {Math.round((syncedOtherPsCount / (totalOtherPsCount || 1)) * 100)}% Safe & Protected
+                    </span>
+                  </div>
+                </div>
+
+                {/* 3. Pending Sync */}
+                <div className="vap-stat-card">
+                  <div className="vap-stat-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "#f59e0b" }}>
+                    <AlertCircle size={22} />
+                  </div>
+                  <div className="vap-stat-info">
+                    <span className="vap-stat-label">Pending Sync (Friend Only)</span>
+                    <span className="vap-stat-value" style={{ color: pendingOtherPsCount > 0 ? "#f59e0b" : "#64748b" }}>
+                      {pendingOtherPsCount}
+                    </span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                      {pendingOtherPsCount > 0 ? "⚠️ At risk if friend link dies" : "✓ All synced!"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4. Active Source Split */}
+                <div className="vap-stat-card">
+                  <div className="vap-stat-icon" style={{ background: "rgba(139, 92, 246, 0.12)", color: "#8b5cf6" }}>
+                    <Server size={22} />
+                  </div>
+                  <div className="vap-stat-info">
+                    <span className="vap-stat-label">Active Stream Source</span>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "2px" }}>
+                      <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#2563eb" }}>☁️ {ourServerStreamCount} Our</span>
+                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>|</span>
+                      <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#7c3aed" }}>🔗 {otherPsStreamCount} Other</span>
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Live streaming split</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Main Card with Controls and Table */}
+              <div className="vap-card">
+                {/* Filter Tabs and Search Bar */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", marginBottom: "16px" }}>
+                  {/* Filter Pills */}
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                    {[
+                      { id: "all", label: `Sabhi Other PS (${totalOtherPsCount})` },
+                      { id: "pending", label: `⚠️ Pending Sync (${pendingOtherPsCount})`, warn: pendingOtherPsCount > 0 },
+                      { id: "synced", label: `✓ Synced in R2 (${syncedOtherPsCount})` },
+                      { id: "active_our_server", label: `☁️ Streaming Our Server (${ourServerStreamCount})` },
+                      { id: "active_other_ps", label: `🔗 Streaming Other PS (${otherPsStreamCount})` }
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setOtherPsFilter(tab.id)}
+                        className={`vap-filter-tab-btn ${otherPsFilter === tab.id ? "active" : ""}`}
+                        style={{
+                          padding: "6px 14px",
+                          borderRadius: "20px",
+                          fontSize: "0.82rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          border: otherPsFilter === tab.id ? "1px solid #2563eb" : "1px solid #e2e8f0",
+                          background: otherPsFilter === tab.id ? "#2563eb" : "#f8fafc",
+                          color: otherPsFilter === tab.id ? "#ffffff" : (tab.warn ? "#d97706" : "#475569"),
+                          transition: "all 0.18s ease"
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Search box */}
+                  <div style={{ position: "relative", minWidth: "220px" }}>
+                    <Search size={15} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }} />
+                    <input
+                      type="text"
+                      className="vap-input"
+                      placeholder="Search title, category..."
+                      value={otherPsSearch}
+                      onChange={(e) => setOtherPsSearch(e.target.value)}
+                      style={{ paddingLeft: "32px", fontSize: "0.83rem", height: "36px" }}
+                    />
+                  </div>
+                </div>
+
+                {/* Quick Selection Toolbar (Counting Wise & Date Wise) */}
+                <div style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: "10px", border: "1px solid #e2e8f0", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+                  {/* Counting Selection Buttons */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#475569" }}>Quick Select:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectCount(10)}
+                      className="vap-btn-secondary"
+                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                    >
+                      First 10
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectCount(25)}
+                      className="vap-btn-secondary"
+                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                    >
+                      First 25
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectCount(50)}
+                      className="vap-btn-secondary"
+                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                    >
+                      First 50
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSelectAllPending}
+                      className="vap-btn-secondary"
+                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px", color: "#d97706", borderColor: "#fde68a" }}
+                    >
+                      All Pending ({pendingOtherPsCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOtherPsIds(getFilteredOtherPsVideos().map((v) => v.id))}
+                      className="vap-btn-secondary"
+                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                    >
+                      Select All Visible ({getFilteredOtherPsVideos().length})
+                    </button>
+                    {selectedOtherPsIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOtherPsIds([])}
+                        className="vap-btn-secondary"
+                        style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px", color: "#ef4444" }}
+                      >
+                        Clear Selection
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Date Range Selection */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                    <Calendar size={14} style={{ color: "#64748b" }} />
+                    <input
+                      type="date"
+                      value={otherPsStartDate}
+                      onChange={(e) => setOtherPsStartDate(e.target.value)}
+                      style={{ padding: "4px 8px", fontSize: "0.78rem", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+                    />
+                    <span style={{ fontSize: "0.78rem", color: "#64748b" }}>to</span>
+                    <input
+                      type="date"
+                      value={otherPsEndDate}
+                      onChange={(e) => setOtherPsEndDate(e.target.value)}
+                      style={{ padding: "4px 8px", fontSize: "0.78rem", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+                    />
+                    {(otherPsStartDate || otherPsEndDate) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOtherPsStartDate("");
+                          setOtherPsEndDate("");
+                        }}
+                        style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "0.78rem" }}
+                      >
+                        Reset Date
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bulk Actions Bar when items selected */}
+                {selectedOtherPsIds.length > 0 && (
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", padding: "10px 16px", borderRadius: "8px", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <CheckCircle2 size={18} style={{ color: "#2563eb" }} />
+                      <span style={{ fontWeight: 700, fontSize: "0.88rem", color: "#1e3a8a" }}>
+                        {selectedOtherPsIds.length} video(s) selected
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="vap-btn-primary"
+                        onClick={() => handleSyncOtherPsVideos(selectedOtherPsIds)}
+                        disabled={isSyncingStorage}
+                        style={{ background: "#16a34a", padding: "6px 14px", fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "6px" }}
+                      >
+                        <Zap size={14} />
+                        <span>Sync Selected to Our Storage ({selectedOtherPsIds.length})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="vap-btn-secondary"
+                        onClick={() => handleSwitchOtherPsSource(selectedOtherPsIds, "our_server")}
+                        disabled={isSwitchingSource}
+                        style={{ padding: "6px 14px", fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "6px" }}
+                      >
+                        <Server size={14} />
+                        <span>Stream from Our Server ({selectedOtherPsIds.length})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="vap-btn-secondary"
+                        onClick={() => handleSwitchOtherPsSource(selectedOtherPsIds, "other_ps")}
+                        disabled={isSwitchingSource}
+                        style={{ padding: "6px 14px", fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "6px" }}
+                      >
+                        <LinkIcon size={14} />
+                        <span>Stream from Other PS ({selectedOtherPsIds.length})</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Videos Table */}
+                <div style={{ overflowX: "auto" }}>
+                  <table className="vap-table" style={{ width: "100%", fontSize: "0.85rem" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: "40px", textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={getFilteredOtherPsVideos().length > 0 && selectedOtherPsIds.length === getFilteredOtherPsVideos().length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedOtherPsIds(getFilteredOtherPsVideos().map((v) => v.id));
+                              } else {
+                                setSelectedOtherPsIds([]);
+                              }
+                            }}
+                          />
+                        </th>
+                        <th style={{ minWidth: "260px" }}>Video</th>
+                        <th style={{ minWidth: "140px" }}>Sync Status</th>
+                        <th style={{ minWidth: "150px" }}>Active Stream Source</th>
+                        <th style={{ minWidth: "260px" }}>URLs (Primary & Backup)</th>
+                        <th style={{ minWidth: "180px", textAlign: "right" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getFilteredOtherPsVideos().length === 0 ? (
+                        <tr>
+                          <td colSpan="6" style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
+                            <HardDrive size={36} style={{ display: "block", margin: "0 auto 10px", opacity: 0.4 }} />
+                            Koi video nahi mili is filter ke sath.
+                          </td>
+                        </tr>
+                      ) : (
+                        getFilteredOtherPsVideos().map((v) => {
+                          const isSynced = isOtherPsSynced(v);
+                          const isSelected = selectedOtherPsIds.includes(v.id);
+                          const activeSource = v.active_source || (isSynced ? "our_server" : "other_ps");
+                          const primaryUrl = v.videoUrl || "";
+                          const secondaryUrl = v.backup_url || v.other_ps_url || "";
+
+                          return (
+                            <tr key={v.id} style={{ background: isSelected ? "rgba(59, 130, 246, 0.04)" : "transparent" }}>
+                              {/* Checkbox */}
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedOtherPsIds([...selectedOtherPsIds, v.id]);
+                                    } else {
+                                      setSelectedOtherPsIds(selectedOtherPsIds.filter((id) => id !== v.id));
+                                    }
+                                  }}
+                                />
+                              </td>
+
+                              {/* Video Details */}
+                              <td>
+                                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                                  <div
+                                    style={{ position: "relative", width: "72px", height: "42px", borderRadius: "6px", overflow: "hidden", background: "#0f172a", flexShrink: 0, cursor: "pointer" }}
+                                    onClick={() => setPreviewVideo(v)}
+                                  >
+                                    <img
+                                      src={v.thumbnail || FALLBACK_THUMBNAIL}
+                                      alt={v.title}
+                                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                      onError={(e) => { e.target.src = FALLBACK_THUMBNAIL; }}
+                                    />
+                                    {v.duration && (
+                                      <span style={{ position: "absolute", bottom: "2px", right: "2px", background: "rgba(0,0,0,0.8)", color: "#fff", fontSize: "0.68rem", padding: "0 3px", borderRadius: "2px" }}>
+                                        {v.duration}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 600, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "240px" }} title={v.title}>
+                                      {cleanDisplayTitle(v.title)}
+                                    </div>
+                                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "2px", fontSize: "0.74rem", color: "#64748b" }}>
+                                      <span className="vap-cat-pill" style={{ padding: "1px 6px", fontSize: "0.7rem" }}>
+                                        {v.category || "General"}
+                                      </span>
+                                      <span>{v.uploadedAt || "Uploaded"}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Sync Status */}
+                              <td>
+                                {isSynced ? (
+                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", background: "#dcfce7", color: "#15803d", padding: "4px 8px", borderRadius: "12px", fontSize: "0.75rem", fontWeight: 700 }}>
+                                    <CheckCircle2 size={13} />
+                                    <span>✓ Synced in R2</span>
+                                  </span>
+                                ) : (
+                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", background: "#fef3c7", color: "#b45309", padding: "4px 8px", borderRadius: "12px", fontSize: "0.75rem", fontWeight: 700 }}>
+                                    <AlertCircle size={13} />
+                                    <span>⚠️ Only Friend Server</span>
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Active Stream Source */}
+                              <td>
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                  <span style={{
+                                    display: "inline-block",
+                                    padding: "3px 8px",
+                                    borderRadius: "6px",
+                                    fontSize: "0.75rem",
+                                    fontWeight: 700,
+                                    background: activeSource === "our_server" ? "#dbeafe" : "#f3e8ff",
+                                    color: activeSource === "our_server" ? "#1d4ed8" : "#6b21a8"
+                                  }}>
+                                    {activeSource === "our_server" ? "☁️ Our Server" : "🔗 Other PS"}
+                                  </span>
+
+                                  {isSynced && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSwitchOtherPsSource(v.id, activeSource === "our_server" ? "other_ps" : "our_server")}
+                                      style={{ background: "none", border: "1px solid #cbd5e1", borderRadius: "4px", padding: "2px 6px", fontSize: "0.7rem", cursor: "pointer", color: "#475569" }}
+                                      title={`Switch to stream from ${activeSource === "our_server" ? "Other PS" : "Our Server"}`}
+                                    >
+                                      Switch
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* URLs (Primary & Secondary) */}
+                              <td>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "0.75rem" }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                    <span style={{ fontWeight: 600, color: "#16a34a", minWidth: "55px" }}>Primary:</span>
+                                    <span style={{ color: "#334155", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={primaryUrl}>
+                                      {primaryUrl}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(primaryUrl);
+                                        showSuccess("Primary URL copied to clipboard!");
+                                      }}
+                                      style={{ background: "none", border: "none", padding: "1px 4px", cursor: "pointer", color: "#94a3b8" }}
+                                      title="Copy Primary URL"
+                                    >
+                                      <Copy size={12} />
+                                    </button>
+                                  </div>
+
+                                  {secondaryUrl && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                      <span style={{ fontWeight: 600, color: "#64748b", minWidth: "55px" }}>Backup:</span>
+                                      <span style={{ color: "#64748b", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={secondaryUrl}>
+                                        {secondaryUrl}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(secondaryUrl);
+                                          showSuccess("Backup URL copied to clipboard!");
+                                        }}
+                                        style={{ background: "none", border: "none", padding: "1px 4px", cursor: "pointer", color: "#94a3b8" }}
+                                        title="Copy Backup URL"
+                                      >
+                                        <Copy size={12} />
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Row Actions */}
+                              <td style={{ textAlign: "right" }}>
+                                <div style={{ display: "inline-flex", gap: "6px" }}>
+                                  {!isSynced ? (
+                                    <button
+                                      type="button"
+                                      className="vap-btn-primary"
+                                      onClick={() => handleSyncOtherPsVideos(v.id)}
+                                      disabled={isSyncingStorage}
+                                      style={{ background: "#16a34a", padding: "5px 10px", fontSize: "0.78rem", display: "flex", alignItems: "center", gap: "4px" }}
+                                      title="Download video to Cloudflare R2"
+                                    >
+                                      <Zap size={13} />
+                                      <span>Sync to Storage</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="vap-btn-secondary"
+                                      onClick={() => handleSyncOtherPsVideos(v.id)}
+                                      disabled={isSyncingStorage}
+                                      style={{ padding: "5px 10px", fontSize: "0.78rem", display: "flex", alignItems: "center", gap: "4px" }}
+                                      title="Re-download and refresh R2 storage copy"
+                                    >
+                                      <RefreshCw size={13} />
+                                      <span>Re-sync</span>
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    className="vap-icon-btn"
+                                    onClick={() => handleEditVideoClick(v)}
+                                    title="Edit video"
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="vap-icon-btn danger"
+                                    onClick={() => handleDeleteVideoClick(v)}
+                                    title="Delete video"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
@@ -5167,7 +6040,7 @@ export default function AdminPanel({
                     setExportIncludeLinks(true);
                   }}
                 >
-                  ✓ Sabhi Videos (All)
+                  ✓ Sabhi Videos (All: {allCurrentList.length})
                 </button>
                 <button
                   type="button"
@@ -5177,7 +6050,7 @@ export default function AdminPanel({
                     setExportIncludeLinks(false);
                   }}
                 >
-                  Cloudflare R2 Only
+                  ☁️ Our Server Only (R2) ({ourServerOnlyCount})
                 </button>
                 <button
                   type="button"
@@ -5187,7 +6060,7 @@ export default function AdminPanel({
                     setExportIncludeLinks(true);
                   }}
                 >
-                  Direct Links Only
+                  🔗 Other Person Storage (Other PS) ({otherPsOnlyCount})
                 </button>
               </div>
 
@@ -5204,7 +6077,7 @@ export default function AdminPanel({
                   <div className="vap-export-card-content">
                     <div className="vap-export-card-title-row">
                       <span className="vap-export-card-title">
-                        Mera Cloudflare R2 Storage
+                        Hamara Server Storage ({ourServerOnlyCount})
                       </span>
                       <span className="vap-export-card-pill">
                         Cloudflare R2 Bucket
@@ -5227,14 +6100,14 @@ export default function AdminPanel({
                   <div className="vap-export-card-content">
                     <div className="vap-export-card-title-row">
                       <span className="vap-export-card-title">
-                        Link Ke Through Chalne Wali Videos
+                        Other Person Storage (Other PS) ({otherPsOnlyCount})
                       </span>
                       <span className="vap-export-card-pill">
                         External Direct Links
                       </span>
                     </div>
                     <p className="vap-export-card-desc">
-                      Wo saari videos jo external direct URLs ya third-party links ke zariye chal rahi hain.
+                      Wo saari videos jo external direct URLs ya friends ke links ke zariye upload hain.
                     </p>
                   </div>
                 </div>
