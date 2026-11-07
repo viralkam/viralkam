@@ -221,6 +221,10 @@ export default function AdminPanel({
   const excelInputRef = useRef(null);
   const editVideoInputRef = useRef(null);
   const editThumbInputRef = useRef(null);
+  const editVideoPlayerRef = useRef(null);
+  const [editVideoDurationSecs, setEditVideoDurationSecs] = useState(0);
+  const [editCurrentScrubTime, setEditCurrentScrubTime] = useState(0);
+  const [isEditFetchingMeta, setIsEditFetchingMeta] = useState(false);
 
   // Fetch Stats and Categories on load
   const loadStatsAndCategories = async () => {
@@ -1710,18 +1714,92 @@ export default function AdminPanel({
   // EDIT VIDEO HANDLERS
   // ==========================================
   const handleStartEdit = (video) => {
+    const cleanUrl = cleanVideoUrl(video.videoUrl || video.title || "");
+    const cleanThumb = video.thumbnail || FALLBACK_THUMBNAIL;
+    const currentViews = video.views !== undefined ? Number(video.views) : (video.initial_views !== undefined ? Number(video.initial_views) : 0);
+    const currentLikes = video.likes !== undefined ? Number(video.likes) : (video.initial_likes !== undefined ? Number(video.initial_likes) : 0);
+
     setEditingVideo({
       ...video,
       title: cleanDisplayTitle(video.title),
-      videoUrl: cleanVideoUrl(video.videoUrl || video.title),
+      videoUrl: cleanUrl,
+      thumbnail: cleanThumb,
       tags: Array.isArray(video.tags) ? video.tags : [],
       privacy: video.privacy || (video.status === "private" ? "private" : "public"),
-      initial_views: video.initial_views !== undefined ? video.initial_views : (video.views || 0),
-      initial_likes: video.initial_likes !== undefined ? video.initial_likes : (video.likes || 0)
+      duration: video.duration || "00:00",
+      views: currentViews,
+      likes: currentLikes,
+      initial_views: currentViews,
+      initial_likes: currentLikes
     });
     setEditFile(null);
     setEditThumbnailFile(null);
+    setEditVideoDurationSecs(0);
+    setEditCurrentScrubTime(0);
     setActiveNav("edit");
+  };
+
+  const handleCaptureEditVideoFrame = () => {
+    const vid = editVideoPlayerRef.current;
+    if (!vid) {
+      showError("Video player is not ready yet.");
+      return;
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = vid.videoWidth || 640;
+      canvas.height = vid.videoHeight || 360;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+      setEditingVideo((prev) => ({
+        ...prev,
+        thumbnail: dataUrl
+      }));
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const file = new File([blob], `edit-thumb-${Math.floor(vid.currentTime)}s.jpg`, { type: "image/jpeg" });
+          setEditThumbnailFile(file);
+        }
+      }, "image/jpeg", 0.88);
+      showSuccess(`✓ Frame captured at ${formatSecsToTime(vid.currentTime)} as new thumbnail!`);
+    } catch (err) {
+      console.warn("Capture frame error:", err);
+      showError("Could not capture frame: " + err.message);
+    }
+  };
+
+  const handleEditAutoFetchMetadata = async () => {
+    if (!editingVideo || !editingVideo.videoUrl) {
+      showError("Please enter a Video URL first.");
+      return;
+    }
+    setIsEditFetchingMeta(true);
+    try {
+      const data = await api.fetchMetadata(editingVideo.videoUrl);
+      if (data && data.success) {
+        setEditingVideo((prev) => ({
+          ...prev,
+          title: data.title || prev.title,
+          description: data.description || prev.description,
+          thumbnail: data.thumbnail || prev.thumbnail,
+          duration: data.duration || prev.duration,
+          category: data.category || prev.category,
+          tags: Array.isArray(data.tags) && data.tags.length > 0 ? Array.from(new Set([...prev.tags, ...data.tags])) : prev.tags
+        }));
+        showSuccess("✓ Video details updated from link!");
+      } else {
+        const cleanT = cleanDisplayTitle(editingVideo.videoUrl);
+        if (cleanT) {
+          setEditingVideo((prev) => ({ ...prev, title: cleanT }));
+        }
+        showSuccess("✓ Video title updated from link.");
+      }
+    } catch (err) {
+      showError("Failed to fetch metadata: " + err.message);
+    } finally {
+      setIsEditFetchingMeta(false);
+    }
   };
 
   const handleEditTagAdd = (val) => {
@@ -1744,7 +1822,7 @@ export default function AdminPanel({
   };
 
   const handleUpdateVideoSubmit = async (e) => {
-    e.preventDefault();
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
     if (!editingVideo || !editingVideo.title.trim()) {
       showError("Video title is required.");
       return;
@@ -1762,12 +1840,20 @@ export default function AdminPanel({
         finalThumbnail = await api.uploadVideoFile(editThumbnailFile);
       }
 
+      const viewsNum = Number(editingVideo.views !== undefined ? editingVideo.views : editingVideo.initial_views) || 0;
+      const likesNum = Number(editingVideo.likes !== undefined ? editingVideo.likes : editingVideo.initial_likes) || 0;
+
       const updatedPayload = {
         ...editingVideo,
         videoUrl: finalVideoUrl,
         thumbnail: finalThumbnail,
         privacy: editingVideo.privacy,
-        status: editingVideo.privacy === "private" ? "private" : "published"
+        status: editingVideo.privacy === "private" ? "private" : "published",
+        views: viewsNum,
+        likes: likesNum,
+        initial_views: viewsNum,
+        initial_likes: likesNum,
+        duration: editingVideo.duration || (editVideoDurationSecs ? formatSecsToTime(editVideoDurationSecs) : "00:00")
       };
 
       const result = await api.updateVideo(editingVideo.id, updatedPayload);
@@ -3641,88 +3727,383 @@ export default function AdminPanel({
               <div className="vap-card">
                 <form onSubmit={handleUpdateVideoSubmit}>
                   <div className="vap-two-col-layout">
-                    {/* Left Column: Player preview, Replace file, Thumbnail, Delete button */}
-                    <div>
-                      {/* Playable Video Preview */}
-                      <div className="vap-form-group">
-                        <label>Current Video Preview</label>
-                        <div
-                          style={{
-                            width: "100%",
-                            aspectRatio: "16 / 9",
-                            background: "#000",
-                            borderRadius: "8px",
-                            overflow: "hidden"
-                          }}
-                        >
-                          {editingVideo.videoUrl && editingVideo.videoUrl.includes("youtube.com") ? (
-                            <iframe
-                              src={editingVideo.videoUrl.replace("watch?v=", "embed/")}
-                              title={editingVideo.title}
-                              style={{ width: "100%", height: "100%", border: "none" }}
-                              allowFullScreen
-                            />
-                          ) : (
-                            <video
-                              src={editingVideo.videoUrl}
-                              poster={editingVideo.thumbnail}
-                              controls
-                              style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                            />
+                    {/* ════ LEFT COLUMN: Video Link, Video Player with Scrubber & Frame Capture, Thumbnail Link, Thumbnail Preview ════ */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+
+                      {/* 1. Video Link Input */}
+                      <div className="vap-form-group" style={{ margin: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <LinkIcon size={15} color="#2563eb" />
+                            <span>Video link</span>
+                          </label>
+                          {editingVideo.videoUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingVideo({ ...editingVideo, videoUrl: "" })}
+                              style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              <X size={12} /> Clear Link
+                            </button>
                           )}
+                        </div>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <input
+                            type="url"
+                            className="vap-input"
+                            placeholder="Paste video link (YouTube, direct MP4, M3U8, etc.)..."
+                            value={editingVideo.videoUrl || ""}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setEditingVideo({ ...editingVideo, videoUrl: val });
+                              setEditFile(null);
+                            }}
+                            style={{ flex: 1 }}
+                          />
+                          <button
+                            type="button"
+                            className="vap-fetch-btn"
+                            disabled={isEditFetchingMeta || !editingVideo.videoUrl?.trim()}
+                            onClick={handleEditAutoFetchMetadata}
+                            title="Auto-fetch video details from this link"
+                          >
+                            {isEditFetchingMeta ? (
+                              <><Loader2 className="animate-spin" size={14} /> Fetching...</>
+                            ) : (
+                              <><Zap size={14} /> Auto-Fetch</>
+                            )}
+                          </button>
                         </div>
                       </div>
 
-                      {/* Optional replacement video file */}
-                      <div className="vap-form-group">
-                        <label>Change Video File (optional)</label>
+                      {/* 2. Video Preview & Local File Select with Scrubber and Frame Capture */}
+                      <div className="vap-form-group" style={{ margin: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <UploadCloud size={15} color="#2563eb" />
+                            <span>Video Preview {editFile ? "(New Local File)" : (editingVideo.videoUrl ? "(Current Video)" : "")}</span>
+                          </label>
+                          {(editFile || editingVideo.videoUrl) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditFile(null);
+                                setEditingVideo({ ...editingVideo, videoUrl: "" });
+                                if (editVideoInputRef.current) editVideoInputRef.current.value = "";
+                              }}
+                              style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              <Trash2 size={12} /> Clear
+                            </button>
+                          )}
+                        </div>
+
                         <input
                           type="file"
                           ref={editVideoInputRef}
-                          accept="video/*"
+                          accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
                           style={{ display: "none" }}
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
                             if (file) {
                               setEditFile(file);
                               const meta = await detectVideoMeta(file);
-                              setEditingVideo({
-                                ...editingVideo,
-                                duration: meta.duration || editingVideo.duration
-                              });
+                              if (meta.duration) {
+                                setEditingVideo((prev) => ({
+                                  ...prev,
+                                  duration: meta.duration
+                                }));
+                              }
                             }
                           }}
                         />
 
-                        <div
-                          className="vap-dropzone"
-                          style={{ minHeight: "130px", padding: "18px" }}
-                          onClick={() => editVideoInputRef.current?.click()}
-                        >
-                          <UploadCloud size={24} color="#2563eb" />
-                          <span className="vap-dropzone-prompt">
-                            {editFile ? editFile.name : "Drag & drop new video file here"}
-                          </span>
-                          <button
-                            type="button"
-                            className="vap-btn-primary"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              editVideoInputRef.current?.click();
+                        {/* Player preview */}
+                        {editFile ? (
+                          /* Case A: New Local File selected */
+                          <div style={{ background: "#0f172a", borderRadius: "10px", padding: "12px", border: "1.5px solid #334155" }}>
+                            <video
+                              ref={editVideoPlayerRef}
+                              src={URL.createObjectURL(editFile)}
+                              controls
+                              crossOrigin="anonymous"
+                              style={{ width: "100%", maxHeight: "200px", borderRadius: "6px", background: "#000", display: "block" }}
+                              onLoadedMetadata={(e) => {
+                                const d = e.target.duration || 0;
+                                setEditVideoDurationSecs(d);
+                                if (!editingVideo.duration || editingVideo.duration === "00:00") {
+                                  setEditingVideo((prev) => ({ ...prev, duration: formatSecsToTime(d) }));
+                                }
+                              }}
+                              onTimeUpdate={(e) => setEditCurrentScrubTime(e.target.currentTime)}
+                            />
+                            <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
+                              <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>
+                                ✓ New Local File: {editFile.name}
+                              </span>
+                              <span style={{ color: "#94a3b8" }}>
+                                {(editFile.size / (1024 * 1024)).toFixed(1)} MB {editVideoDurationSecs ? `| ${formatSecsToTime(editVideoDurationSecs)}` : ""}
+                              </span>
+                            </div>
+
+                            {/* Timeline scrubber */}
+                            <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #1e293b" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                                <span style={{ color: "#cbd5e1", fontSize: "0.78rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                                  <Film size={13} color="#38bdf8" /> Video Timeline Scrubber:
+                                </span>
+                                <span style={{ color: "#38bdf8", fontSize: "0.78rem", fontFamily: "monospace", fontWeight: 700 }}>
+                                  {formatSecsToTime(editCurrentScrubTime)} / {formatSecsToTime(editVideoDurationSecs)}
+                                </span>
+                              </div>
+
+                              <input
+                                type="range"
+                                min={0}
+                                max={editVideoDurationSecs || 100}
+                                step={0.1}
+                                value={editCurrentScrubTime}
+                                onChange={(e) => {
+                                  const t = parseFloat(e.target.value) || 0;
+                                  setEditCurrentScrubTime(t);
+                                  if (editVideoPlayerRef.current) editVideoPlayerRef.current.currentTime = t;
+                                }}
+                                style={{ width: "100%", accentColor: "#2563eb", cursor: "pointer", height: "6px" }}
+                              />
+
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px", gap: "6px", flexWrap: "wrap" }}>
+                                <div style={{ display: "flex", gap: "4px" }}>
+                                  {[
+                                    { label: "0s", time: 0 },
+                                    { label: "5s", time: 5 },
+                                    { label: "15s", time: 15 },
+                                    { label: "30s", time: 30 },
+                                    { label: "Mid", time: editVideoDurationSecs ? editVideoDurationSecs / 2 : 10 },
+                                  ].map((btn, idx) => (
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      onClick={() => {
+                                        const t = Math.min(btn.time, editVideoDurationSecs || btn.time);
+                                        setEditCurrentScrubTime(t);
+                                        if (editVideoPlayerRef.current) editVideoPlayerRef.current.currentTime = t;
+                                      }}
+                                      style={{ background: "#1e293b", border: "1px solid #475569", color: "#e2e8f0", fontSize: "0.72rem", padding: "3px 7px", borderRadius: "4px", cursor: "pointer" }}
+                                    >
+                                      {btn.label}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={handleCaptureEditVideoFrame}
+                                  style={{ background: "#2563eb", color: "#ffffff", border: "none", borderRadius: "5px", padding: "5px 10px", fontSize: "0.78rem", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "5px", cursor: "pointer" }}
+                                  title="Capture frame at current video time as thumbnail"
+                                >
+                                  <Camera size={13} />
+                                  <span>Capture Frame as Thumbnail</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : editingVideo.videoUrl ? (
+                          /* Case B: Existing or New Video URL (YouTube or Direct Video) */
+                          (() => {
+                            const ytMatch = editingVideo.videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+                            const ytId = ytMatch ? ytMatch[1] : null;
+
+                            return (
+                              <div style={{ background: "#0f172a", borderRadius: "10px", padding: "12px", border: "1.5px solid #334155" }}>
+                                {ytId ? (
+                                  <div style={{ position: "relative", width: "100%", aspectRatio: "16 / 9", maxHeight: "200px", borderRadius: "6px", overflow: "hidden", background: "#000" }}>
+                                    <iframe
+                                      src={`https://www.youtube.com/embed/${ytId}`}
+                                      title="YouTube Preview"
+                                      style={{ width: "100%", height: "100%", border: "none" }}
+                                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                      allowFullScreen
+                                    />
+                                  </div>
+                                ) : (
+                                  <video
+                                    ref={editVideoPlayerRef}
+                                    src={cleanVideoUrl(editingVideo.videoUrl)}
+                                    controls
+                                    crossOrigin="anonymous"
+                                    style={{ width: "100%", maxHeight: "200px", borderRadius: "6px", background: "#000", display: "block" }}
+                                    onLoadedMetadata={(e) => {
+                                      const d = e.target.duration || 0;
+                                      setEditVideoDurationSecs(d);
+                                      if (!editingVideo.duration || editingVideo.duration === "00:00") {
+                                        setEditingVideo((prev) => ({ ...prev, duration: formatSecsToTime(d) }));
+                                      }
+                                    }}
+                                    onTimeUpdate={(e) => setEditCurrentScrubTime(e.target.currentTime)}
+                                  />
+                                )}
+
+                                <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
+                                  <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "65%" }}>
+                                    ✓ Video Source: {ytId ? `YouTube (${ytId})` : cleanDisplayTitle(editingVideo.videoUrl)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => editVideoInputRef.current?.click()}
+                                    style={{ background: "#1e293b", border: "1px solid #475569", color: "#93c5fd", borderRadius: "4px", padding: "3px 8px", fontSize: "0.74rem", cursor: "pointer" }}
+                                  >
+                                    Replace with Local File
+                                  </button>
+                                </div>
+
+                                {/* Timeline Frame Scrubber for direct video URLs */}
+                                {!ytId && (
+                                  <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #1e293b" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                                      <span style={{ color: "#cbd5e1", fontSize: "0.78rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                                        <Film size={13} color="#38bdf8" /> Video Timeline Scrubber:
+                                      </span>
+                                      <span style={{ color: "#38bdf8", fontSize: "0.78rem", fontFamily: "monospace", fontWeight: 700 }}>
+                                        {formatSecsToTime(editCurrentScrubTime)} / {formatSecsToTime(editVideoDurationSecs)}
+                                      </span>
+                                    </div>
+
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={editVideoDurationSecs || 100}
+                                      step={0.1}
+                                      value={editCurrentScrubTime}
+                                      onChange={(e) => {
+                                        const t = parseFloat(e.target.value) || 0;
+                                        setEditCurrentScrubTime(t);
+                                        if (editVideoPlayerRef.current) editVideoPlayerRef.current.currentTime = t;
+                                      }}
+                                      style={{ width: "100%", accentColor: "#2563eb", cursor: "pointer", height: "6px" }}
+                                    />
+
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px", gap: "6px", flexWrap: "wrap" }}>
+                                      <div style={{ display: "flex", gap: "4px" }}>
+                                        {[
+                                          { label: "0s", time: 0 },
+                                          { label: "5s", time: 5 },
+                                          { label: "15s", time: 15 },
+                                          { label: "30s", time: 30 },
+                                          { label: "Mid", time: editVideoDurationSecs ? editVideoDurationSecs / 2 : 10 },
+                                        ].map((btn, idx) => (
+                                          <button
+                                            key={idx}
+                                            type="button"
+                                            onClick={() => {
+                                              const t = Math.min(btn.time, editVideoDurationSecs || btn.time);
+                                              setEditCurrentScrubTime(t);
+                                              if (editVideoPlayerRef.current) editVideoPlayerRef.current.currentTime = t;
+                                            }}
+                                            style={{ background: "#1e293b", border: "1px solid #475569", color: "#e2e8f0", fontSize: "0.72rem", padding: "3px 7px", borderRadius: "4px", cursor: "pointer" }}
+                                          >
+                                            {btn.label}
+                                          </button>
+                                        ))}
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        onClick={handleCaptureEditVideoFrame}
+                                        style={{ background: "#2563eb", color: "#ffffff", border: "none", borderRadius: "5px", padding: "5px 10px", fontSize: "0.78rem", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "5px", cursor: "pointer" }}
+                                        title="Capture frame at current video time as thumbnail"
+                                      >
+                                        <Camera size={13} />
+                                        <span>Capture Frame as Thumbnail</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          /* Case C: No video - Dropzone */
+                          <div
+                            className="vap-dropzone"
+                            onClick={() => editVideoInputRef.current?.click()}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (e.dataTransfer.files?.[0]) {
+                                setEditFile(e.dataTransfer.files[0]);
+                              }
                             }}
+                            style={{ padding: "20px 14px", minHeight: "110px", cursor: "pointer" }}
                           >
-                            Choose File
-                          </button>
-                        </div>
+                            <div className="vap-dropzone-icon" style={{ marginBottom: "6px" }}><UploadCloud size={24} /></div>
+                            <div className="vap-dropzone-prompt" style={{ fontSize: "0.88rem" }}>
+                              Choose Local Video File or Drag & Drop Here
+                            </div>
+                            <span className="vap-dropzone-sub" style={{ fontSize: "0.76rem", marginTop: "4px" }}>
+                              MP4, MOV, MKV, WEBM (Or paste video link in the box above)
+                            </span>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Thumbnail with change button */}
-                      <div className="vap-form-group">
-                        <label>Thumbnail</label>
+                      {/* 3. Thumbnail Link Input */}
+                      <div className="vap-form-group" style={{ margin: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <LinkIcon size={15} color="#16a34a" />
+                            <span>Thumbnail link</span>
+                          </label>
+                          {editingVideo.thumbnail && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingVideo({ ...editingVideo, thumbnail: "" });
+                                setEditThumbnailFile(null);
+                              }}
+                              style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              <X size={12} /> Clear
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="url"
+                          className="vap-input"
+                          placeholder="Paste Thumbnail image URL (https://...jpg, png, webp)"
+                          value={editingVideo.thumbnail || ""}
+                          onChange={(e) => {
+                            setEditingVideo({ ...editingVideo, thumbnail: e.target.value });
+                            setEditThumbnailFile(null);
+                          }}
+                        />
+                      </div>
+
+                      {/* 4. Local Thumbnail Select & Large 16:9 Preview */}
+                      <div className="vap-form-group" style={{ margin: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Film size={15} color="#16a34a" />
+                            <span>Thumbnail preview & change</span>
+                          </label>
+                          {editingVideo.thumbnail && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingVideo({ ...editingVideo, thumbnail: "" });
+                                setEditThumbnailFile(null);
+                                if (editThumbInputRef.current) editThumbInputRef.current.value = "";
+                              }}
+                              style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              <Trash2 size={12} /> Remove Thumbnail
+                            </button>
+                          )}
+                        </div>
+
                         <input
                           type="file"
                           ref={editThumbInputRef}
-                          accept="image/*"
+                          accept="image/jpeg,image/png,image/webp"
                           style={{ display: "none" }}
                           onChange={(e) => {
                             const file = e.target.files?.[0];
@@ -3736,36 +4117,43 @@ export default function AdminPanel({
                           }}
                         />
 
-                        <div style={{ display: "flex", gap: "14px", alignItems: "center" }}>
-                          <div
-                            style={{
-                              width: "120px",
-                              height: "70px",
-                              borderRadius: "8px",
-                              overflow: "hidden",
-                              border: "1px solid #cbd5e1"
-                            }}
-                          >
+                        <div
+                          style={{
+                            width: "100%",
+                            aspectRatio: "16 / 9",
+                            maxHeight: "180px",
+                            borderRadius: "10px",
+                            background: "#0f172a",
+                            border: "2px dashed #334155",
+                            overflow: "hidden",
+                            position: "relative",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            cursor: "pointer"
+                          }}
+                          onClick={() => editThumbInputRef.current?.click()}
+                          title="Click to choose new local thumbnail image"
+                        >
+                          {editingVideo.thumbnail ? (
                             <img
-                              src={editingVideo.thumbnail || FALLBACK_THUMBNAIL}
-                              alt="Thumbnail"
-                              onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
+                              src={editingVideo.thumbnail}
+                              alt="Thumbnail Preview"
                               style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
                             />
-                          </div>
-
-                          <button
-                            type="button"
-                            className="vap-btn-secondary"
-                            onClick={() => editThumbInputRef.current?.click()}
-                          >
-                            Change Thumbnail
-                          </button>
+                          ) : (
+                            <div style={{ textAlign: "center", color: "#94a3b8", padding: "16px" }}>
+                              <Film size={28} style={{ margin: "0 auto 6px", opacity: 0.8 }} />
+                              <div style={{ fontSize: "0.84rem", fontWeight: 500 }}>Click to Choose Local Thumbnail Image</div>
+                              <div style={{ fontSize: "0.74rem", color: "#64748b", marginTop: "2px" }}>PNG, JPG, WEBP (16:9 Recommended)</div>
+                            </div>
+                          )}
                         </div>
                       </div>
 
                       {/* Live Website URL Box */}
-                      <div style={{ marginTop: "18px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
                         <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>
                           Live Website URL
                         </div>
@@ -3781,20 +4169,9 @@ export default function AdminPanel({
                         </a>
                       </div>
 
-                      {/* Delete Video Button (red outline at bottom left) */}
-                      <div style={{ marginTop: "24px" }}>
-                        <button
-                          type="button"
-                          className="vap-btn-danger-outline"
-                          onClick={() => handleDeleteVideoConfirm(editingVideo)}
-                        >
-                          <Trash2 size={16} />
-                          <span>Delete Video</span>
-                        </button>
-                      </div>
                     </div>
 
-                    {/* Right Column: Title, Description, Category, Tags, Duration, Privacy, Initial values */}
+                    {/* ════ RIGHT COLUMN: Title, Description, Category, Tags, Duration, Views, Likes, Privacy ════ */}
                     <div>
                       <div className="vap-form-group">
                         <label>Title <span className="required">*</span></label>
@@ -3894,46 +4271,44 @@ export default function AdminPanel({
                         )}
                       </div>
 
+                      {/* Duration / Views / Likes (Keeps existing views/likes, never auto-resets to 0) */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
                         <div className="vap-form-group">
-                          <label>Duration</label>
+                          <label>Duration <span style={{ fontSize: "0.74rem", color: "#64748b" }}>(Auto / Manual)</span></label>
                           <input
                             type="text"
                             className="vap-input"
                             value={editingVideo.duration || ""}
-                            placeholder="Auto or MM:SS"
+                            placeholder="00:00"
                             onChange={(e) => setEditingVideo({ ...editingVideo, duration: e.target.value })}
                           />
                         </div>
 
                         <div className="vap-form-group">
-                          <label>Initial Views</label>
+                          <label>Views <span style={{ fontSize: "0.74rem", color: "#64748b" }}>(Current: {editingVideo.views ?? 0})</span></label>
                           <input
                             type="number"
                             className="vap-input"
-                            value={editingVideo.initial_views !== undefined ? editingVideo.initial_views : 0}
-                            onChange={(e) =>
-                              setEditingVideo({ ...editingVideo, initial_views: parseInt(e.target.value, 10) || 0 })
-                            }
+                            value={editingVideo.views !== undefined ? editingVideo.views : (editingVideo.initial_views !== undefined ? editingVideo.initial_views : 0)}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10) || 0;
+                              setEditingVideo({ ...editingVideo, views: v, initial_views: v });
+                            }}
                           />
                         </div>
 
                         <div className="vap-form-group">
-                          <label>Initial Likes</label>
+                          <label>Likes <span style={{ fontSize: "0.74rem", color: "#64748b" }}>(Current: {editingVideo.likes ?? 0})</span></label>
                           <input
                             type="number"
                             className="vap-input"
-                            value={editingVideo.initial_likes !== undefined ? editingVideo.initial_likes : 0}
-                            onChange={(e) =>
-                              setEditingVideo({ ...editingVideo, initial_likes: parseInt(e.target.value, 10) || 0 })
-                            }
+                            value={editingVideo.likes !== undefined ? editingVideo.likes : (editingVideo.initial_likes !== undefined ? editingVideo.initial_likes : 0)}
+                            onChange={(e) => {
+                              const l = parseInt(e.target.value, 10) || 0;
+                              setEditingVideo({ ...editingVideo, likes: l, initial_likes: l });
+                            }}
                           />
                         </div>
-                      </div>
-
-                      <div style={{ fontSize: "0.8rem", color: "#64748b", marginBottom: "16px" }}>
-                        Actual platform engagement: <strong>{(editingVideo.views || 0).toLocaleString()} views</strong>,{" "}
-                        <strong>{(editingVideo.likes || 0).toLocaleString()} likes</strong> (preserved safely during updates).
                       </div>
 
                       {/* Privacy Radio / Dropdown */}
@@ -3970,11 +4345,31 @@ export default function AdminPanel({
                         </div>
                       </div>
 
-                      <div style={{ marginTop: "24px", display: "flex", justifyContent: "flex-end" }}>
-                        <button type="submit" className="vap-btn-primary" disabled={isUpdating}>
-                          {isUpdating ? "Saving changes..." : "Update Video"}
+                      {/* Action Buttons: Delete Video & Save Changes */}
+                      <div style={{ marginTop: "24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                        <button
+                          type="button"
+                          className="vap-btn-danger-outline"
+                          onClick={() => handleDeleteVideoConfirm(editingVideo)}
+                        >
+                          <Trash2 size={16} />
+                          <span>Delete Video</span>
                         </button>
+
+                        <div style={{ display: "flex", gap: "10px" }}>
+                          <button
+                            type="button"
+                            className="vap-btn-secondary"
+                            onClick={() => setActiveNav("videos")}
+                          >
+                            Cancel
+                          </button>
+                          <button type="submit" className="vap-btn-primary" disabled={isUpdating}>
+                            {isUpdating ? "Saving changes..." : "Update Video"}
+                          </button>
+                        </div>
                       </div>
+
                     </div>
                   </div>
                 </form>

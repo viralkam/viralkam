@@ -892,8 +892,8 @@ export default {
           return String(val);
         };
 
-        const initialViews = body.initial_views !== undefined ? Number(body.initial_views) : (body.initialViews !== undefined ? Number(body.initialViews) : Number(existing.initial_views || 0));
-        const initialLikes = body.initial_likes !== undefined ? Number(body.initial_likes) : (body.initialLikes !== undefined ? Number(body.initialLikes) : Number(existing.initial_likes || 0));
+        const viewsToSet = body.views !== undefined ? Number(body.views) : (body.initial_views !== undefined ? Number(body.initial_views) : Number(existing.views || existing.initial_views || 0));
+        const likesToSet = body.likes !== undefined ? Number(body.likes) : (body.initial_likes !== undefined ? Number(body.initial_likes) : Number(existing.likes || existing.initial_likes || 0));
 
         // Auto-register new tags into tags table
         if (Array.isArray(body.tags)) {
@@ -919,6 +919,8 @@ export default {
             videoUrl = ?,
             privacy = ?,
             status = ?,
+            views = ?,
+            likes = ?,
             initial_views = ?,
             initial_likes = ?,
             updated_at = CURRENT_TIMESTAMP
@@ -933,8 +935,10 @@ export default {
           body.videoUrl !== undefined ? body.videoUrl : existing.videoUrl,
           privacy,
           status,
-          initialViews,
-          initialLikes,
+          viewsToSet,
+          likesToSet,
+          viewsToSet,
+          likesToSet,
           id
         ).run();
 

@@ -874,14 +874,8 @@ const server = http.createServer(async (req, res) => {
         return String(val);
       };
 
-      // Keep initial views and likes separate from actual engagement tracking
-      const initialViews = data.initial_views !== undefined 
-        ? Number(data.initial_views) 
-        : (data.initialViews !== undefined ? Number(data.initialViews) : Number(existing.initial_views || 0));
-      
-      const initialLikes = data.initial_likes !== undefined 
-        ? Number(data.initial_likes) 
-        : (data.initialLikes !== undefined ? Number(data.initialLikes) : Number(existing.initial_likes || 0));
+      const viewsToSet = data.views !== undefined ? Number(data.views) : (data.initial_views !== undefined ? Number(data.initial_views) : Number(existing.views || existing.initial_views || 0));
+      const likesToSet = data.likes !== undefined ? Number(data.likes) : (data.initial_likes !== undefined ? Number(data.initial_likes) : Number(existing.likes || existing.initial_likes || 0));
 
       const updateStmt = db.prepare(`
         UPDATE videos SET
@@ -894,6 +888,8 @@ const server = http.createServer(async (req, res) => {
           videoUrl = ?,
           privacy = ?,
           status = ?,
+          views = ?,
+          likes = ?,
           initial_views = ?,
           initial_likes = ?,
           updated_at = CURRENT_TIMESTAMP
@@ -923,8 +919,10 @@ const server = http.createServer(async (req, res) => {
         data.videoUrl !== undefined ? data.videoUrl : existing.videoUrl,
         privacy,
         status,
-        initialViews,
-        initialLikes,
+        viewsToSet,
+        likesToSet,
+        viewsToSet,
+        likesToSet,
         id
       );
 
