@@ -583,15 +583,16 @@ export default function AdminPanel({
     }
 
     const currentUrl = (singleVideoUrl || linkUrl).trim();
-    if (singleSourceType === "link" && !currentUrl) {
-      showError("Please enter a video URL.");
+    if (!singleFile && !currentUrl) {
+      showError("Please enter a Video Link or select a Local Video File.");
       return;
     }
 
+    const isLocalUpload = Boolean(singleFile);
     const historyId = `up-${Date.now()}`;
-    const uploadMethod = singleSourceType === "file" ? "Single Upload (File)" : "Upload via Link";
-    const fileNameDesc = singleSourceType === "file" ? singleFile.name : currentUrl;
-    const sizeStr = singleSourceType === "file" ? `${(singleFile.size / (1024 * 1024)).toFixed(2)} MB` : (saveToServer ? "Save to Server" : "Direct Link");
+    const uploadMethod = isLocalUpload ? "Single Upload (File)" : "Upload via Link";
+    const fileNameDesc = isLocalUpload ? singleFile.name : currentUrl;
+    const sizeStr = isLocalUpload ? `${(singleFile.size / (1024 * 1024)).toFixed(2)} MB` : (saveToServer ? "Save to Server" : "Direct Link");
 
     uploadHistory.addItem({
       id: historyId,
@@ -603,17 +604,17 @@ export default function AdminPanel({
       thumbnail: singleThumbnailUrl.trim() || singleThumbnail || linkThumbnail || FALLBACK_THUMBNAIL,
       status: "uploading",
       progress: 10,
-      currentStep: singleSourceType === "file" ? "Uploading video to Server storage..." : (saveToServer ? "Downloading & saving video to server storage..." : "Saving video link to database...")
+      currentStep: isLocalUpload ? "Uploading video to Server storage..." : (saveToServer ? "Downloading & saving video to server storage..." : "Saving video link to database...")
     });
     refreshHistory();
 
     setIsUploadingSingle(true);
     setSingleUploadProgress(0);
-    setSingleUploadStep(singleSourceType === "file" ? "Starting upload to server storage..." : (saveToServer ? "Streaming video to server storage..." : "Saving video details..."));
+    setSingleUploadStep(isLocalUpload ? "Starting upload to server storage..." : (saveToServer ? "Streaming video to server storage..." : "Saving video details..."));
 
     try {
       let finalVideoUrl = "";
-      if (singleSourceType === "file") {
+      if (isLocalUpload) {
         finalVideoUrl = await api.uploadVideoFile(singleFile, (pct, loaded, total) => {
           const loadedMB = (loaded / (1024 * 1024)).toFixed(1);
           const totalMB = (total / (1024 * 1024)).toFixed(1);
@@ -1097,6 +1098,14 @@ export default function AdminPanel({
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
     return sourceList.filter((v) => {
+      // Storage vs External Link filter
+      const isStorageVideo = (v.videoUrl || "").includes("/cdn/") || 
+                             (v.videoUrl || "").includes("r2.dev") || 
+                             (v.videoUrl || "").includes("/uploads/") ||
+                             (v.videoUrl || "").includes("viralkaam");
+      if (!exportIncludeStorage && isStorageVideo) return false;
+      if (!exportIncludeLinks && !isStorageVideo) return false;
+
       // Category filter
       if (exportCategoryFilter !== "all" && (v.category || "General").toLowerCase() !== exportCategoryFilter.toLowerCase()) {
         return false;
@@ -1299,6 +1308,8 @@ export default function AdminPanel({
       setIsExporting(false);
     }
   };
+
+  const handleExportToExcel = handleExecuteExcelExport;
 
   const handleExcelFileSelect = (file) => {
     if (!file) return;
@@ -2269,38 +2280,24 @@ export default function AdminPanel({
               <div className="vap-publish-header">
                 <h2 className="vap-page-title" style={{ margin: 0 }}>Upload Video</h2>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                  {singleSourceType === "excel" ? (
-                    <button
-                      type="button"
-                      className="vap-btn-primary"
-                      disabled={isImportingExcel || excelParsedRows.filter((r) => r.isValid).length === 0}
-                      onClick={handleImportExcelVideos}
-                      style={{ padding: "10px 22px", fontSize: "0.95rem" }}
-                    >
-                      {isImportingExcel
-                        ? `Importing... (${excelProgress}%)`
-                        : `📤 Import ${excelParsedRows.filter((r) => r.isValid).length} Videos`}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="vap-btn-primary"
-                      style={{
-                        padding: "10px 22px",
-                        fontSize: "0.95rem",
-                        opacity: isUploadingSingle ? 0.75 : 1,
-                        cursor: isUploadingSingle ? "not-allowed" : "pointer"
-                      }}
-                      disabled={isUploadingSingle || isFetchingMeta}
-                      onClick={handleSingleUploadSubmit}
-                    >
-                      {isUploadingSingle ? (
-                        <><Loader2 className="animate-spin" size={16} /> Uploading...</>
-                      ) : (
-                        <><UploadCloud size={16} /> Publish Video</>
-                      )}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="vap-btn-primary"
+                    style={{
+                      padding: "10px 24px",
+                      fontSize: "0.95rem",
+                      opacity: isUploadingSingle ? 0.75 : 1,
+                      cursor: isUploadingSingle ? "not-allowed" : "pointer"
+                    }}
+                    disabled={isUploadingSingle || isFetchingMeta}
+                    onClick={handleSingleUploadSubmit}
+                  >
+                    {isUploadingSingle ? (
+                      <><Loader2 className="animate-spin" size={16} /> Publishing...</>
+                    ) : (
+                      <><UploadCloud size={16} /> Publish Video</>
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -2308,83 +2305,112 @@ export default function AdminPanel({
               <div className="vap-card" style={{ marginTop: "16px" }}>
                 <div className="vap-two-col-layout">
 
-                  {/* ════ LEFT COLUMN ════ */}
-                  <div>
-                    {/* 3 Source Type Buttons */}
-                    <div className="vap-upload-source-btns">
-                      <button
-                        type="button"
-                        className={`vap-src-btn ${singleSourceType === "file" ? "active" : ""}`}
-                        onClick={() => setSingleSourceType("file")}
-                      >
-                        <UploadCloud size={16} />
-                        <span>Local (Server)</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`vap-src-btn ${singleSourceType === "link" ? "active" : ""}`}
-                        onClick={() => setSingleSourceType("link")}
-                      >
-                        <LinkIcon size={16} />
-                        <span>Via Link</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`vap-src-btn ${singleSourceType === "excel" ? "active" : ""}`}
-                        onClick={() => setSingleSourceType("excel")}
-                      >
-                        <FileSpreadsheet size={16} />
-                        <span>Excel Import</span>
-                      </button>
-                    </div>
+                  {/* ════ LEFT COLUMN (Video Link, Local File Select with Preview, Thumbnail Link, Local Thumbnail Select with Preview) ════ */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
 
-                    {/* Save in Server Toggle Banner (Applies across all modes: Local, Link, Excel) */}
-                    <div
-                      className={`vap-save-server-banner ${saveToServer ? "active" : ""}`}
-                      onClick={() => setSaveToServer(!saveToServer)}
-                      style={{ cursor: "pointer", userSelect: "none", marginBottom: "16px" }}
-                      title="Click to toggle whether video & thumbnail are saved in server storage"
-                    >
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          <div className={`vap-save-icon ${saveToServer ? "active" : ""}`}>
-                            <Server size={18} />
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "#1e293b" }}>
-                              Save in Server Storage: {saveToServer ? <span style={{ color: "#16a34a" }}>ON</span> : <span style={{ color: "#64748b" }}>OFF</span>}
-                            </div>
-                            <div style={{ fontSize: "0.76rem", color: "#64748b" }}>
-                              {saveToServer
-                                ? "Videos & thumbnails will be downloaded and saved directly into server storage (R2 / local uploads)"
-                                : "External streaming link only (no file saved to server storage, saves disk space)"}
-                            </div>
-                          </div>
-                        </div>
+                    {/* 1. Video Link */}
+                    <div className="vap-form-group" style={{ margin: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <LinkIcon size={15} color="#2563eb" />
+                          <span>Video link</span>
+                        </label>
+                        {singleVideoUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSingleVideoUrl("");
+                              setLinkUrl("");
+                            }}
+                            style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                          >
+                            <X size={12} /> Clear Link
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <input
+                          type="url"
+                          className="vap-input"
+                          placeholder="Paste video link (YouTube, direct MP4, M3U8, etc.)..."
+                          value={singleVideoUrl}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSingleVideoUrl(val);
+                            setLinkUrl(val);
+                          }}
+                          onPaste={(e) => {
+                            const pasted = e.clipboardData.getData("text");
+                            if (pasted && (pasted.startsWith("http://") || pasted.startsWith("https://"))) {
+                              setTimeout(() => handleAutoFetchMetadata(pasted), 120);
+                            }
+                          }}
+                          style={{ flex: 1 }}
+                        />
                         <button
                           type="button"
-                          className={`vap-toggle-pill ${saveToServer ? "enabled" : "disabled"}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSaveToServer(!saveToServer);
-                          }}
+                          className="vap-fetch-btn"
+                          disabled={isFetchingMeta || !singleVideoUrl.trim()}
+                          onClick={() => handleAutoFetchMetadata(singleVideoUrl)}
+                          title="Auto-fetch video details from this link"
                         >
-                          <div className="vap-toggle-dot" />
-                          <span>{saveToServer ? "SAVING ON" : "SAVING OFF"}</span>
+                          {isFetchingMeta ? (
+                            <><Loader2 className="animate-spin" size={14} /> Fetching...</>
+                          ) : (
+                            <><Zap size={14} /> Auto-Fetch</>
+                          )}
                         </button>
                       </div>
                     </div>
 
-                    {/* ── LOCAL FILE ── */}
-                    {singleSourceType === "file" && (
-                      <div className="vap-form-group">
-                        <input
-                          type="file"
-                          ref={singleVideoInputRef}
-                          accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
-                          style={{ display: "none" }}
-                          onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
-                        />
+                    {/* 2. Local File Select (Ise me preview aa jayega) */}
+                    <div className="vap-form-group" style={{ margin: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <UploadCloud size={15} color="#2563eb" />
+                          <span>Local file select (Preview)</span>
+                        </label>
+                        {singleFile && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSingleFile(null);
+                              if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
+                            }}
+                            style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                          >
+                            <Trash2 size={12} /> Remove Video
+                          </button>
+                        )}
+                      </div>
+
+                      <input
+                        type="file"
+                        ref={singleVideoInputRef}
+                        accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
+                        style={{ display: "none" }}
+                        onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
+                      />
+
+                      {singleFile ? (
+                        /* Embedded Local Video Player Preview */
+                        <div style={{ background: "#0f172a", borderRadius: "10px", padding: "10px", border: "1.5px solid #334155" }}>
+                          <video
+                            src={URL.createObjectURL(singleFile)}
+                            controls
+                            style={{ width: "100%", maxHeight: "200px", borderRadius: "6px", background: "#000", display: "block" }}
+                          />
+                          <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
+                            <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "65%" }}>
+                              ✓ {singleFile.name}
+                            </span>
+                            <span style={{ color: "#94a3b8" }}>
+                              {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {singleDuration ? `| ${singleDuration}` : ""}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Local File Select Dropzone */
                         <div
                           className="vap-dropzone"
                           onClick={() => singleVideoInputRef.current?.click()}
@@ -2393,262 +2419,164 @@ export default function AdminPanel({
                             e.preventDefault();
                             if (e.dataTransfer.files?.[0]) handleSingleFileSelect(e.dataTransfer.files[0]);
                           }}
+                          style={{ padding: "20px 14px", minHeight: "110px", cursor: "pointer" }}
                         >
-                          <div className="vap-dropzone-icon"><UploadCloud size={28} /></div>
-                          <div className="vap-dropzone-prompt">
-                            {singleFile ? singleFile.name : "Drag & drop video file here"}
+                          <div className="vap-dropzone-icon" style={{ marginBottom: "6px" }}><UploadCloud size={24} /></div>
+                          <div className="vap-dropzone-prompt" style={{ fontSize: "0.88rem" }}>
+                            Choose Local Video File or Drag & Drop Here
                           </div>
-                          <span className="vap-dropzone-sub">or</span>
-                          <button
-                            type="button"
-                            className="vap-btn-primary"
-                            onClick={(e) => { e.stopPropagation(); singleVideoInputRef.current?.click(); }}
-                          >
-                            Choose File
-                          </button>
-                          <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>
-                            MP4, MOV, AVI, MKV, WEBM (Max: 2 GB)
+                          <span className="vap-dropzone-sub" style={{ fontSize: "0.76rem", marginTop: "4px" }}>
+                            MP4, MOV, MKV, WEBM (Preview will appear right here)
                           </span>
-                          {singleFile && (
-                            <div style={{ marginTop: "10px", display: "flex", alignItems: "center", gap: "10px", justifyContent: "center" }}>
-                              <span style={{ color: "#16a34a", fontSize: "0.85rem", fontWeight: 600 }}>
-                                ✓ {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {singleDuration ? `| ${singleDuration}` : ""}
-                              </span>
-                              <button
-                                type="button"
-                                className="vap-btn-secondary"
-                                style={{ fontSize: "0.78rem", padding: "4px 8px", color: "#dc2626" }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSingleFile(null);
-                                  if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
-                                }}
-                              >
-                                <Trash2 size={12} /> Remove
-                              </button>
-                            </div>
-                          )}
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
-                    {/* ── VIA LINK ── */}
-                    {singleSourceType === "link" && (
-                      <div className="vap-form-group">
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem" }}>
-                            Video URL <span className="required">*</span>
-                          </label>
-                          {singleVideoUrl && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSingleVideoUrl("");
-                                setLinkUrl("");
-                              }}
-                              style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
-                            >
-                              <X size={13} /> Clear
-                            </button>
-                          )}
-                        </div>
-                        <div style={{ display: "flex", gap: "8px" }}>
-                          <input
-                            type="url"
-                            className="vap-input"
-                            placeholder="Paste YouTube, Vimeo, Instagram, or direct MP4/M3U8 link..."
-                            value={singleVideoUrl}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSingleVideoUrl(val);
-                              setLinkUrl(val);
-                            }}
-                            onPaste={(e) => {
-                              const pasted = e.clipboardData.getData("text");
-                              if (pasted && (pasted.startsWith("http://") || pasted.startsWith("https://"))) {
-                                setTimeout(() => handleAutoFetchMetadata(pasted), 120);
-                              }
-                            }}
-                            style={{ flex: 1 }}
-                          />
-                          <button
-                            type="button"
-                            className="vap-fetch-btn"
-                            disabled={isFetchingMeta || !singleVideoUrl.trim()}
-                            onClick={() => handleAutoFetchMetadata(singleVideoUrl)}
-                            title="Auto-fetch video title, description, category, tags, and thumbnail from this link"
-                          >
-                            {isFetchingMeta ? (
-                              <><Loader2 className="animate-spin" size={14} /> Fetching...</>
-                            ) : (
-                              <><Zap size={14} /> Auto-Fetch</>
-                            )}
-                          </button>
-                        </div>
-                        <span style={{ fontSize: "0.78rem", color: "#2563eb", marginTop: "6px", display: "block" }}>
-                          ⚡ Paste any video link & click <strong>Auto-Fetch</strong>: Title, description, category, tags, duration & thumbnail auto-fill!
-                        </span>
-                      </div>
-                    )}
-
-                    {/* ── EXCEL ── */}
-                    {singleSourceType === "excel" && (
-                      <div className="vap-form-group">
-                        <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
-                          <button
-                            type="button"
-                            className="vap-btn-secondary"
-                            onClick={handleDownloadExcelTemplate}
-                            style={{ fontSize: "0.82rem" }}
-                          >
-                            <Download size={14} /> Sample Template
-                          </button>
-                          <button
-                            type="button"
-                            className="vap-btn-secondary"
-                            onClick={() => setShowExportModal(true)}
-                            style={{ fontSize: "0.82rem" }}
-                          >
-                            <FileSpreadsheet size={14} /> Export Videos
-                          </button>
-                        </div>
-                        <input
-                          type="file"
-                          ref={excelInputRef}
-                          accept=".xlsx,.xls,.csv"
-                          style={{ display: "none" }}
-                          onChange={(e) => handleExcelFileSelect(e.target.files?.[0])}
-                        />
-                        <div
-                          className="vap-dropzone"
-                          onClick={() => excelInputRef.current?.click()}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (e.dataTransfer.files?.[0]) handleExcelFileSelect(e.dataTransfer.files[0]);
-                          }}
-                        >
-                          <div className="vap-dropzone-icon"><FileSpreadsheet size={28} /></div>
-                          <div className="vap-dropzone-prompt">
-                            {excelFile ? excelFile.name : "Drag & drop Excel / CSV file"}
-                          </div>
-                          <span className="vap-dropzone-sub">or</span>
-                          <button
-                            type="button"
-                            className="vap-btn-primary"
-                            onClick={(e) => { e.stopPropagation(); excelInputRef.current?.click(); }}
-                          >
-                            Choose Excel File
-                          </button>
-                          <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>.xlsx / .xls / .csv</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* ── THUMBNAIL (shown for file & link modes) ── */}
-                    {singleSourceType !== "excel" && (
-                      <div className="vap-form-group" style={{ marginTop: "18px" }}>
-                        <label style={{ fontWeight: 600, fontSize: "0.88rem", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                          <span>🖼️ Video Thumbnail</span>
-                          {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
-                            <span style={{ fontSize: "0.78rem", color: "#16a34a", fontWeight: 600 }}>✓ Thumbnail attached</span>
-                          )}
+                    {/* 3. Thumbnail Link */}
+                    <div className="vap-form-group" style={{ margin: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <LinkIcon size={15} color="#16a34a" />
+                          <span>Thumbnail link</span>
                         </label>
-                        <input
-                          type="file"
-                          ref={singleThumbInputRef}
-                          accept="image/jpeg,image/png,image/webp"
-                          style={{ display: "none" }}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              setSingleThumbnailFile(file);
-                              const obj = URL.createObjectURL(file);
-                              setSingleThumbnail(obj);
-                              setSingleThumbnailUrl(obj);
-                              setLinkThumbnail(obj);
-                            }
-                          }}
-                        />
-
-                        {/* 16:9 Preview box */}
-                        <div
-                          style={{
-                            width: "100%",
-                            aspectRatio: "16 / 9",
-                            maxHeight: "180px",
-                            borderRadius: "10px",
-                            background: "#0f172a",
-                            border: "2px dashed #334155",
-                            overflow: "hidden",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            marginBottom: "10px",
-                            cursor: "pointer"
-                          }}
-                          onClick={() => singleThumbInputRef.current?.click()}
-                          title="Click to choose a local thumbnail image"
-                        >
-                          {(singleThumbnailUrl || singleThumbnail) ? (
-                            <img
-                              src={singleThumbnailUrl || singleThumbnail}
-                              alt="Thumbnail preview"
-                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                            />
-                          ) : (
-                            <div style={{ textAlign: "center", color: "#94a3b8" }}>
-                              <Film size={32} />
-                              <div style={{ fontSize: "0.78rem", marginTop: "6px" }}>Click to select thumbnail image</div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Action buttons row */}
-                        <div style={{ display: "flex", gap: "8px", marginBottom: "8px", flexWrap: "wrap" }}>
+                        {singleThumbnailUrl && (
                           <button
                             type="button"
-                            className="vap-btn-secondary"
-                            style={{ fontSize: "0.82rem", padding: "6px 12px" }}
-                            onClick={() => singleThumbInputRef.current?.click()}
+                            onClick={() => {
+                              setSingleThumbnailUrl("");
+                              if (!singleThumbnailFile) setSingleThumbnail("");
+                            }}
+                            style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
                           >
-                            📁 Local File
+                            <X size={12} /> Clear
                           </button>
-                          {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
-                            <button
-                              type="button"
-                              className="vap-btn-secondary"
-                              style={{ fontSize: "0.82rem", padding: "6px 12px", color: "#dc2626", borderColor: "#fecaca" }}
-                              onClick={() => {
-                                setSingleThumbnail("");
-                                setSingleThumbnailFile(null);
-                                setSingleThumbnailUrl("");
-                                setLinkThumbnail("");
-                                if (singleThumbInputRef.current) singleThumbInputRef.current.value = "";
-                              }}
-                            >
-                              🗑️ Remove Thumbnail
-                            </button>
-                          )}
-                        </div>
-
-                        {/* URL input */}
-                        <input
-                          type="url"
-                          className="vap-input"
-                          style={{ fontSize: "0.85rem" }}
-                          placeholder="Or enter custom Thumbnail URL"
-                          value={singleThumbnailUrl}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSingleThumbnailUrl(val);
-                            setSingleThumbnail(val);
-                            setLinkThumbnail(val);
-                            setSingleThumbnailFile(null);
-                          }}
-                        />
+                        )}
                       </div>
-                    )}
+                      <input
+                        type="url"
+                        className="vap-input"
+                        placeholder="Paste Thumbnail image URL (https://...jpg, png, webp)"
+                        value={singleThumbnailUrl}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSingleThumbnailUrl(val);
+                          setSingleThumbnail(val);
+                          setLinkThumbnail(val);
+                          setSingleThumbnailFile(null);
+                        }}
+                      />
+                    </div>
+
+                    {/* 4. Local Thumbnail Select (Ise me preview aa jayega) */}
+                    <div className="vap-form-group" style={{ margin: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <Film size={15} color="#16a34a" />
+                          <span>Local thumbnail select (Preview)</span>
+                        </label>
+                        {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSingleThumbnail("");
+                              setSingleThumbnailFile(null);
+                              setSingleThumbnailUrl("");
+                              setLinkThumbnail("");
+                              if (singleThumbInputRef.current) singleThumbInputRef.current.value = "";
+                            }}
+                            style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                          >
+                            <Trash2 size={12} /> Remove Thumbnail
+                          </button>
+                        )}
+                      </div>
+
+                      <input
+                        type="file"
+                        ref={singleThumbInputRef}
+                        accept="image/jpeg,image/png,image/webp"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setSingleThumbnailFile(file);
+                            const obj = URL.createObjectURL(file);
+                            setSingleThumbnail(obj);
+                            setSingleThumbnailUrl(obj);
+                            setLinkThumbnail(obj);
+                          }
+                        }}
+                      />
+
+                      <div
+                        style={{
+                          width: "100%",
+                          aspectRatio: "16 / 9",
+                          maxHeight: "180px",
+                          borderRadius: "10px",
+                          background: "#0f172a",
+                          border: "2px dashed #334155",
+                          overflow: "hidden",
+                          position: "relative",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: "pointer"
+                        }}
+                        onClick={() => singleThumbInputRef.current?.click()}
+                        title="Click to choose local thumbnail image"
+                      >
+                        {(singleThumbnailUrl || singleThumbnail) ? (
+                          <img
+                            src={singleThumbnailUrl || singleThumbnail}
+                            alt="Thumbnail Preview"
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div style={{ textAlign: "center", color: "#94a3b8", padding: "16px" }}>
+                            <Film size={28} style={{ margin: "0 auto 6px", opacity: 0.8 }} />
+                            <div style={{ fontSize: "0.84rem", fontWeight: 500 }}>Click to Choose Local Thumbnail Image</div>
+                            <div style={{ fontSize: "0.74rem", color: "#64748b", marginTop: "2px" }}>PNG, JPG, WEBP (16:9 Recommended)</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Save in Server Checkbox */}
+                    <div
+                      style={{
+                        padding: "10px 14px",
+                        background: saveToServer ? "#eff6ff" : "#f8fafc",
+                        border: `1.5px solid ${saveToServer ? "#93c5fd" : "#e2e8f0"}`,
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        cursor: "pointer",
+                        userSelect: "none"
+                      }}
+                      onClick={() => setSaveToServer(!saveToServer)}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <input
+                          type="checkbox"
+                          checked={saveToServer}
+                          onChange={(e) => setSaveToServer(e.target.checked)}
+                          style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <div>
+                          <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b" }}>
+                            Save in Server Storage {saveToServer ? "(ON)" : "(OFF)"}
+                          </div>
+                          <div style={{ fontSize: "0.74rem", color: "#64748b" }}>
+                            {saveToServer ? "Videos & thumbnails will be saved into server storage" : "External direct stream without consuming server space"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
 
                   {/* ════ RIGHT COLUMN (Unified State for File & Link) ════ */}
@@ -3839,6 +3767,208 @@ export default function AdminPanel({
                       )}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================
+              SCREEN 7: EXPORT DATA
+              ======================================================== */}
+          {activeNav === "export" && (
+            <div>
+              <div className="vap-page-header">
+                <div>
+                  <h2 className="vap-page-title">Export Videos & Data</h2>
+                  <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.85rem" }}>
+                    Export your complete video database to .xlsx Excel format with custom date, category, and storage filters.
+                  </p>
+                </div>
+              </div>
+
+              {/* Main Export Card */}
+              <div className="vap-card" style={{ marginBottom: "20px" }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: "1.05rem", fontWeight: 700 }}>
+                  1. Filter Videos to Export
+                </h3>
+
+                {/* Storage Quick Presets */}
+                <div className="vap-export-presets" style={{ marginBottom: "16px" }}>
+                  <button
+                    type="button"
+                    className={`vap-export-preset-btn ${exportIncludeStorage && exportIncludeLinks ? "active" : ""}`}
+                    onClick={() => {
+                      setExportIncludeStorage(true);
+                      setExportIncludeLinks(true);
+                    }}
+                  >
+                    ✓ Sabhi Videos (All: {allExportVideos.length || videosCount})
+                  </button>
+                  <button
+                    type="button"
+                    className={`vap-export-preset-btn ${exportIncludeStorage && !exportIncludeLinks ? "active" : ""}`}
+                    onClick={() => {
+                      setExportIncludeStorage(true);
+                      setExportIncludeLinks(false);
+                    }}
+                  >
+                    ☁️ Cloudflare R2 / Server Storage Only
+                  </button>
+                  <button
+                    type="button"
+                    className={`vap-export-preset-btn ${!exportIncludeStorage && exportIncludeLinks ? "active" : ""}`}
+                    onClick={() => {
+                      setExportIncludeStorage(false);
+                      setExportIncludeLinks(true);
+                    }}
+                  >
+                    🔗 External Direct Links Only
+                  </button>
+                </div>
+
+                {/* Date Filter Modes */}
+                <div style={{ marginTop: "16px" }}>
+                  <label style={{ fontWeight: 600, fontSize: "0.88rem", display: "block", marginBottom: "8px" }}>
+                    Date Filter
+                  </label>
+                  <div className="vap-export-mode-presets" style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "14px" }}>
+                    {[
+                      { id: "all", label: "All Time" },
+                      { id: "today", label: "Today" },
+                      { id: "last7", label: "Last 7 Days" },
+                      { id: "last30", label: "Last 30 Days" },
+                      { id: "upto", label: "Up To Date" },
+                      { id: "range", label: "Custom Date Range" }
+                    ].map((m) => (
+                      <button
+                        type="button"
+                        key={m.id}
+                        className={`vap-export-mode-btn ${exportDateMode === m.id ? "active" : ""}`}
+                        onClick={() => setExportDateMode(m.id)}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Date Input Pickers */}
+                  {(exportDateMode === "upto" || exportDateMode === "range") && (
+                    <div className="vap-export-inputs-grid" style={{ display: "flex", gap: "12px", marginBottom: "14px", flexWrap: "wrap" }}>
+                      {exportDateMode === "range" && (
+                        <div className="vap-export-input-group" style={{ flex: 1, minWidth: "160px" }}>
+                          <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>Start Date</label>
+                          <input
+                            type="date"
+                            className="vap-input"
+                            value={exportStartDate}
+                            onChange={(e) => setExportStartDate(e.target.value)}
+                          />
+                        </div>
+                      )}
+                      <div className="vap-export-input-group" style={{ flex: 1, minWidth: "160px" }}>
+                        <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>End Date</label>
+                        <input
+                          type="date"
+                          className="vap-input"
+                          value={exportEndDate}
+                          onChange={(e) => setExportEndDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Category & Privacy Filters */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginTop: "10px" }}>
+                  <div className="vap-form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>Filter by Category</label>
+                    <select
+                      className="vap-form-select"
+                      value={exportCategoryFilter}
+                      onChange={(e) => setExportCategoryFilter(e.target.value)}
+                    >
+                      <option value="all">All Categories</option>
+                      {categoriesList.map((c) => (
+                        <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="vap-form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>Filter by Privacy</label>
+                    <select
+                      className="vap-form-select"
+                      value={exportPrivacyFilter}
+                      onChange={(e) => setExportPrivacyFilter(e.target.value)}
+                    >
+                      <option value="all">All (Public & Private)</option>
+                      <option value="public">Public Videos Only</option>
+                      <option value="private">Private Videos Only</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Format Columns Preview */}
+                <div className="vap-export-format-preview" style={{ marginTop: "18px" }}>
+                  <div><strong>Standard Columns in Exported Excel:</strong></div>
+                  <div className="vap-export-cols-tags">
+                    {["Video URL", "Thumbnail URL", "Title", "Description", "Category", "Tags", "Duration", "Initial Views", "Initial Likes", "Upload Date", "Upload Time", "Privacy"].map((col) => (
+                      <span key={col} className="vap-export-col-tag">{col}</span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Export Action Card */}
+                <div style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px" }}>
+                  <div>
+                    <span style={{ fontSize: "0.95rem", fontWeight: 700, color: "#1e293b" }}>
+                      Ready to Export: <span style={{ color: "#16a34a" }}>{getFilteredExportVideos().length} Videos</span>
+                    </span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "#64748b", marginTop: "2px" }}>
+                      Instant download matching your selection (.xlsx format)
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="vap-btn-primary"
+                    onClick={handleExecuteExcelExport}
+                    disabled={isExporting || getFilteredExportVideos().length === 0}
+                    style={{
+                      background: "#16a34a",
+                      padding: "12px 28px",
+                      fontSize: "0.95rem",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px"
+                    }}
+                  >
+                    {isExporting ? (
+                      <><Loader2 className="animate-spin" size={16} /> Generating Excel...</>
+                    ) : (
+                      <><Download size={16} /> Download Excel (.xlsx)</>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Sample Template Download */}
+              <div className="vap-card">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+                  <div>
+                    <h4 style={{ margin: "0 0 4px", fontSize: "0.95rem", fontWeight: 700 }}>Excel Import Template</h4>
+                    <p style={{ margin: 0, fontSize: "0.82rem", color: "#64748b" }}>
+                      Download the official blank Excel template to bulk upload multiple videos at once.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="vap-btn-secondary"
+                    onClick={handleDownloadExcelTemplate}
+                    style={{ fontSize: "0.85rem", padding: "8px 16px", display: "flex", alignItems: "center", gap: "6px" }}
+                  >
+                    <Download size={15} /> Download Sample Template (.xlsx)
+                  </button>
                 </div>
               </div>
             </div>
