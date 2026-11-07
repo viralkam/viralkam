@@ -2559,6 +2559,7 @@ export default function AdminPanel({
 
   // Storage & Other PS statistics for sidebar & screens
   const allCurrentList = getAllCurrentVideos();
+  const totalAllVideosCount = allCurrentList.length;
   const otherPsList = allCurrentList.filter(isOtherPsVideo);
   const totalOtherPsCount = otherPsList.length;
   const syncedOtherPsCount = otherPsList.filter(isOtherPsSynced).length;
