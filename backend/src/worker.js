@@ -1237,6 +1237,105 @@ export default {
         });
       }
 
+      // 4.55 POST /api/videos/verify-storage (Verify whether synced files actually exist in Cloudflare R2)
+      if (pathname === '/api/videos/verify-storage' && method === 'POST') {
+        await ensureD1Columns(env.DB);
+        const body = await request.json().catch(() => ({}));
+        const verifyAll = Boolean(body.all);
+        const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+
+        if (!env.BUCKET) {
+          return json({ success: false, message: 'Cloudflare R2 BUCKET is not bound' }, 500);
+        }
+
+        const extractR2Key = (fileUrl) => {
+          if (!fileUrl) return null;
+          try {
+            const parsed = new URL(fileUrl, 'https://vcdn.viralkaam.com');
+            let p = parsed.pathname;
+            if (p.startsWith('/cdn/')) p = p.substring(5);
+            else if (p.startsWith('/')) p = p.substring(1);
+            return p;
+          } catch {
+            let clean = String(fileUrl).trim();
+            if (clean.startsWith('/cdn/')) clean = clean.substring(5);
+            else if (clean.startsWith('/')) clean = clean.substring(1);
+            return clean;
+          }
+        };
+
+        let vidsToCheck = [];
+        if (verifyAll || ids.length === 0) {
+          const res = await env.DB.prepare(`
+            SELECT id, title, videoUrl, our_server_url, other_ps_url, backup_url, thumbnail, storage_source 
+            FROM videos 
+            WHERE (our_server_url IS NOT NULL AND our_server_url != '') 
+               OR storage_source = 'our_server'
+               OR videoUrl LIKE '%vcdn.viralkaam%'
+               OR videoUrl LIKE '%/cdn/%'
+          `).all();
+          vidsToCheck = res?.results || [];
+        } else {
+          for (const id of ids) {
+            const row = await env.DB.prepare('SELECT id, title, videoUrl, our_server_url, other_ps_url, backup_url, thumbnail, storage_source FROM videos WHERE id = ?').bind(id).first();
+            if (row) vidsToCheck.push(row);
+          }
+        }
+
+        let missingCount = 0;
+        let verifiedCount = 0;
+        const resetTitles = [];
+
+        for (const vid of vidsToCheck) {
+          let isVideoMissing = false;
+          const urlToCheck = vid.our_server_url || vid.videoUrl;
+          if (urlToCheck) {
+            const vKey = extractR2Key(urlToCheck);
+            if (vKey) {
+              let head = await env.BUCKET.head(vKey).catch(() => null);
+              if (!head && !vKey.startsWith('videos/')) {
+                head = await env.BUCKET.head(`videos/${vKey}`).catch(() => null);
+              }
+              if (!head && vKey.startsWith('videos/')) {
+                head = await env.BUCKET.head(vKey.replace(/^videos\//, '')).catch(() => null);
+              }
+              if (!head) {
+                isVideoMissing = true;
+              }
+            }
+          }
+
+          if (isVideoMissing) {
+            missingCount++;
+            resetTitles.push(vid.title);
+            const fallbackUrl = vid.other_ps_url || (vid.backup_url && !vid.backup_url.includes('vcdn.viralkaam') ? vid.backup_url : null) || 'https://vjs.zencdn.net/v/oceans.mp4';
+            await env.DB.prepare(`
+              UPDATE videos SET
+                our_server_url = NULL,
+                active_source = 'other_ps',
+                storage_source = 'other_ps',
+                videoUrl = ?,
+                backup_url = NULL,
+                updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(fallbackUrl, vid.id).run();
+          } else {
+            verifiedCount++;
+          }
+        }
+
+        return json({
+          success: true,
+          checkedCount: vidsToCheck.length,
+          verifiedCount,
+          missingCount,
+          resetTitles,
+          message: missingCount > 0
+            ? `Storage Checked (${vidsToCheck.length} files): ${missingCount} deleted from R2 were reset to Pending Sync, ${verifiedCount} verified active!`
+            : `All ${verifiedCount} synced file(s) are active and verified in Cloudflare R2 bucket!`
+        });
+      }
+
       // 4.6 POST /api/videos/switch-source (1-click active source toggle between Our Server & Other PS)
       if (pathname === '/api/videos/switch-source' && method === 'POST') {
         await ensureD1Columns(env.DB);

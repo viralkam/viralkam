@@ -281,6 +281,27 @@ export const api = {
   },
 
   /**
+   * Verify whether synced videos exist in Cloudflare R2 storage
+   */
+  async verifyStorageVideos(payload = { all: true }) {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/videos/verify-storage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Failed to verify storage (HTTP ${res.status})`);
+    }
+    return await res.json();
+  },
+
+
+  /**
    * Delete video (Admin)
    */
   async deleteVideo(id) {

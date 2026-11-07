@@ -1013,6 +1013,68 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // 4.55 POST /api/videos/verify-storage
+    if (pathname === '/api/videos/verify-storage' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const verifyAll = Boolean(body.all);
+      const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+
+      const uploadsDir = path.join(__dirname, 'uploads');
+      let vidsToCheck = [];
+      if (verifyAll || ids.length === 0) {
+        vidsToCheck = db.prepare(`
+          SELECT id, title, videoUrl, our_server_url, other_ps_url, backup_url, thumbnail 
+          FROM videos 
+          WHERE our_server_url IS NOT NULL AND our_server_url != ''
+        `).all();
+      } else {
+        for (const id of ids) {
+          const row = db.prepare('SELECT id, title, videoUrl, our_server_url, other_ps_url, backup_url, thumbnail FROM videos WHERE id = ?').get(id);
+          if (row) vidsToCheck.push(row);
+        }
+      }
+
+      let missingCount = 0;
+      let verifiedCount = 0;
+      for (const vid of vidsToCheck) {
+        let isMissing = false;
+        if (vid.our_server_url && vid.our_server_url.includes('/uploads/')) {
+          const fname = path.basename(vid.our_server_url);
+          const fPath = path.join(uploadsDir, fname);
+          if (!fs.existsSync(fPath)) {
+            isMissing = true;
+          }
+        }
+
+        if (isMissing) {
+          missingCount++;
+          const fallback = vid.other_ps_url || vid.backup_url || vid.videoUrl;
+          db.prepare(`
+            UPDATE videos SET
+              our_server_url = NULL,
+              active_source = 'other_ps',
+              storage_source = 'other_ps',
+              videoUrl = ?,
+              backup_url = NULL,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(fallback, vid.id);
+        } else {
+          verifiedCount++;
+        }
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        checkedCount: vidsToCheck.length,
+        verifiedCount,
+        missingCount,
+        message: missingCount > 0
+          ? `Storage check: ${missingCount} deleted files reset to Pending Sync, ${verifiedCount} verified active!`
+          : `All ${verifiedCount} files active in local server storage!`
+      });
+    }
+
     // 4.6 POST /api/videos/switch-source
     if (pathname === '/api/videos/switch-source' && req.method === 'POST') {
       const body = await parseBody(req);

@@ -250,6 +250,9 @@ export default function AdminPanel({
   const [otherPsSearch, setOtherPsSearch] = useState("");
   const [otherPsStartDate, setOtherPsStartDate] = useState("");
   const [otherPsEndDate, setOtherPsEndDate] = useState("");
+  const [isVerifyingStorage, setIsVerifyingStorage] = useState(false);
+  const [otherPsScopeMode, setOtherPsScopeMode] = useState("latest"); // 'latest' | 'all' | 'selected' | 'date'
+  const [otherPsLatestCount, setOtherPsLatestCount] = useState(50);
 
   // Fetch Stats and Categories on load
   const loadStatsAndCategories = async () => {
@@ -517,7 +520,16 @@ export default function AdminPanel({
   };
 
   const getFilteredOtherPsVideos = () => {
-    let list = getOtherPsVideos();
+    let list = getAllCurrentVideos();
+
+    if (otherPsFilter === "our_all") {
+      list = list.filter(isVideoOnOurServer);
+    } else if (otherPsFilter === "all_videos") {
+      list = list;
+    } else {
+      // Default: external / friend videos (other PS)
+      list = list.filter(isOtherPsVideo);
+    }
 
     if (otherPsSearch && otherPsSearch.trim()) {
       const q = otherPsSearch.trim().toLowerCase();
@@ -560,6 +572,60 @@ export default function AdminPanel({
     }
 
     return list;
+  };
+
+  // Verify whether synced files actually exist in Cloudflare R2 bucket
+  const handleVerifyStorage = async () => {
+    setIsVerifyingStorage(true);
+    try {
+      const res = await api.verifyStorageVideos({ all: true });
+      if (res && res.success) {
+        showSuccess(res.message);
+        await loadVideos();
+        await loadAllVideosForExport();
+      } else {
+        showError(res?.message || "Storage verification failed.");
+      }
+    } catch (err) {
+      console.error("[Verify Storage Error]:", err);
+      showError(err.message || "Failed to verify storage files in R2.");
+    } finally {
+      setIsVerifyingStorage(false);
+    }
+  };
+
+  // Scope Target Resolver
+  const getScopeTargetIds = () => {
+    const list = getFilteredOtherPsVideos();
+    if (otherPsScopeMode === "selected") {
+      return selectedOtherPsIds;
+    }
+    if (otherPsScopeMode === "latest") {
+      const num = Math.max(1, parseInt(otherPsLatestCount, 10) || 50);
+      return list.slice(0, num).map((v) => v.id);
+    }
+    if (otherPsScopeMode === "date" || otherPsScopeMode === "all") {
+      return list.map((v) => v.id);
+    }
+    return selectedOtherPsIds.length > 0 ? selectedOtherPsIds : list.slice(0, 50).map((v) => v.id);
+  };
+
+  const handleApplyScopeSource = async (targetSource) => {
+    const ids = getScopeTargetIds();
+    if (!ids || ids.length === 0) {
+      showError("Is rule/scope ke mutabiq koi video nahi mili.");
+      return;
+    }
+    await handleSwitchOtherPsSource(ids, targetSource, false);
+  };
+
+  const handleApplyScopeSync = async () => {
+    const ids = getScopeTargetIds();
+    if (!ids || ids.length === 0) {
+      showError("Is rule/scope ke mutabiq koi video nahi mili.");
+      return;
+    }
+    await handleSyncOtherPsVideos(ids);
   };
 
   // Sync external Other PS video(s) to Cloudflare R2
@@ -5415,8 +5481,20 @@ export default function AdminPanel({
                   </div>
                 </div>
 
-                {/* Quick 1-Click Action Buttons */}
+                {/* Right Header Action Buttons: Storage Check & Sync All */}
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="vap-btn-secondary"
+                    disabled={isVerifyingStorage}
+                    onClick={handleVerifyStorage}
+                    style={{ padding: "8px 14px", fontSize: "0.84rem", display: "flex", alignItems: "center", gap: "6px" }}
+                    title="Check if synced files still exist in Cloudflare R2 bucket. Resets deleted files to Pending Sync."
+                  >
+                    <RefreshCw size={14} className={isVerifyingStorage ? "animate-spin" : ""} />
+                    <span>{isVerifyingStorage ? "Checking Storage..." : "🔍 Verify Storage (Check R2)"}</span>
+                  </button>
+
                   <button
                     type="button"
                     className="vap-btn-primary"
@@ -5425,35 +5503,11 @@ export default function AdminPanel({
                       const pending = otherPsList.filter((v) => !isOtherPsSynced(v));
                       handleSyncOtherPsVideos(pending.map((v) => v.id));
                     }}
-                    style={{ background: "#16a34a", padding: "9px 16px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}
-                    title="Sync all unsynced videos to Cloudflare R2 in 1 click"
+                    style={{ background: "#16a34a", padding: "8px 16px", fontSize: "0.84rem", display: "flex", alignItems: "center", gap: "6px" }}
+                    title="Sync all unsynced videos to Cloudflare R2"
                   >
-                    <Zap size={15} />
+                    <Zap size={14} />
                     <span>Sync All Pending ({pendingOtherPsCount})</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="vap-btn-secondary"
-                    disabled={isSwitchingSource || syncedOtherPsCount === 0}
-                    onClick={() => handleSwitchOtherPsSource(null, "our_server", true)}
-                    style={{ padding: "9px 14px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}
-                    title="Stream all eligible synced videos from Our Server (Fast & Reliable)"
-                  >
-                    <Server size={15} />
-                    <span>Stream All from Our Server</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="vap-btn-secondary"
-                    disabled={isSwitchingSource}
-                    onClick={() => handleSwitchOtherPsSource(null, "other_ps", true)}
-                    style={{ padding: "9px 14px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "6px" }}
-                    title="Stream all videos from Friend's Server (Saves R2 bandwidth)"
-                  >
-                    <LinkIcon size={15} />
-                    <span>Stream All from Other PS</span>
                   </button>
                 </div>
               </div>
@@ -5474,63 +5528,100 @@ export default function AdminPanel({
                 </div>
               )}
 
-              {/* 4 Stat Cards */}
+              {/* 4 Top Cards */}
               <div className="vap-stats-grid" style={{ marginBottom: "20px" }}>
-                {/* 1. Total Other PS */}
-                <div className="vap-stat-card">
+                {/* 1. All Videos (Total) */}
+                <div
+                  className="vap-stat-card"
+                  onClick={() => setOtherPsFilter("all_videos")}
+                  style={{
+                    cursor: "pointer",
+                    border: otherPsFilter === "all_videos" ? "2px solid #3b82f6" : "1px solid #e2e8f0",
+                    transition: "all 0.18s ease"
+                  }}
+                  title="Click to view all website videos (Both Our Server & Others)"
+                >
                   <div className="vap-stat-icon" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6" }}>
-                    <HardDrive size={22} />
+                    <Film size={22} />
                   </div>
                   <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
-                    <span className="vap-stat-label">Total Other PS Videos</span>
-                    <span className="vap-stat-value" style={{ display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{totalOtherPsCount}</span>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>External / friend links</span>
+                    <span className="vap-stat-label">All Videos (Total)</span>
+                    <span className="vap-stat-value" style={{ display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{totalAllVideosCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>
+                      ☁️ {ourServerOnlyCount} Our • 🔗 {totalOtherPsCount} Others
+                    </span>
                   </div>
                 </div>
 
-                {/* 2. Synced in R2 */}
-                <div className="vap-stat-card">
+                {/* 2. Others Sync Status (Others ki Kitni Synced) */}
+                <div
+                  className="vap-stat-card"
+                  onClick={() => setOtherPsFilter("all")}
+                  style={{
+                    cursor: "pointer",
+                    border: (otherPsFilter === "all" || otherPsFilter === "pending" || otherPsFilter === "synced") ? "2px solid #16a34a" : "1px solid #e2e8f0",
+                    transition: "all 0.18s ease"
+                  }}
+                  title="Click to view Others videos & sync status"
+                >
                   <div className="vap-stat-icon" style={{ background: "rgba(22, 163, 74, 0.12)", color: "#16a34a" }}>
                     <CheckCircle2 size={22} />
                   </div>
                   <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
-                    <span className="vap-stat-label">Synced in Our Server (R2)</span>
-                    <span className="vap-stat-value" style={{ color: "#16a34a", display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{syncedOtherPsCount}</span>
-                    <span style={{ fontSize: "0.75rem", color: "#16a34a", fontWeight: 600, marginTop: "2px" }}>
-                      {Math.round((syncedOtherPsCount / (totalOtherPsCount || 1)) * 100)}% Safe & Protected
+                    <span className="vap-stat-label">Others (Total & Synced)</span>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
+                      <span className="vap-stat-value" style={{ fontSize: "1.5rem", fontWeight: 800 }}>{totalOtherPsCount}</span>
+                      <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#16a34a" }}>({syncedOtherPsCount} Synced)</span>
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: pendingOtherPsCount > 0 ? "#d97706" : "#16a34a", marginTop: "2px", fontWeight: 600 }}>
+                      ⚠️ {pendingOtherPsCount} Pending Sync
                     </span>
                   </div>
                 </div>
 
-                {/* 3. Pending Sync */}
-                <div className="vap-stat-card">
-                  <div className="vap-stat-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "#f59e0b" }}>
-                    <AlertCircle size={22} />
-                  </div>
-                  <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
-                    <span className="vap-stat-label">Pending Sync (Friend Only)</span>
-                    <span className="vap-stat-value" style={{ color: pendingOtherPsCount > 0 ? "#f59e0b" : "#64748b", display: "block", fontSize: "1.5rem", fontWeight: 800 }}>
-                      {pendingOtherPsCount}
-                    </span>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>
-                      {pendingOtherPsCount > 0 ? "⚠️ At risk if friend link dies" : "✓ All synced!"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* 4. Active Source Split */}
-                <div className="vap-stat-card">
-                  <div className="vap-stat-icon" style={{ background: "rgba(139, 92, 246, 0.12)", color: "#8b5cf6" }}>
+                {/* 3. Our All (Hamaari Saari Videos - Local + Synced) */}
+                <div
+                  className="vap-stat-card"
+                  onClick={() => setOtherPsFilter("our_all")}
+                  style={{
+                    cursor: "pointer",
+                    border: otherPsFilter === "our_all" ? "2px solid #2563eb" : "1px solid #e2e8f0",
+                    transition: "all 0.18s ease"
+                  }}
+                  title="Click to view all videos stored on our Cloudflare R2 server"
+                >
+                  <div className="vap-stat-icon" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#2563eb" }}>
                     <Server size={22} />
                   </div>
                   <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
-                    <span className="vap-stat-label">Active Stream Source</span>
-                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "4px" }}>
-                      <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#2563eb" }}>☁️ {ourServerStreamCount} Our</span>
-                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>|</span>
-                      <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#7c3aed" }}>🔗 {otherPsStreamCount} Other</span>
-                    </div>
-                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>Live streaming split</span>
+                    <span className="vap-stat-label">Our Server All</span>
+                    <span className="vap-stat-value" style={{ color: "#2563eb", display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{ourServerOnlyCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>
+                      Safe in Cloudflare R2 bucket
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4. Others All (Others PS ki Saari Videos) */}
+                <div
+                  className="vap-stat-card"
+                  onClick={() => setOtherPsFilter("others_all")}
+                  style={{
+                    cursor: "pointer",
+                    border: otherPsFilter === "others_all" ? "2px solid #8b5cf6" : "1px solid #e2e8f0",
+                    transition: "all 0.18s ease"
+                  }}
+                  title="Click to view all external / friend link videos"
+                >
+                  <div className="vap-stat-icon" style={{ background: "rgba(139, 92, 246, 0.12)", color: "#8b5cf6" }}>
+                    <LinkIcon size={22} />
+                  </div>
+                  <div className="vap-stat-info" style={{ display: "flex", flexDirection: "column" }}>
+                    <span className="vap-stat-label">Others PS All</span>
+                    <span className="vap-stat-value" style={{ color: "#7c3aed", display: "block", fontSize: "1.5rem", fontWeight: 800 }}>{totalOtherPsCount}</span>
+                    <span style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>
+                      External friend server links
+                    </span>
                   </div>
                 </div>
               </div>
@@ -5542,7 +5633,7 @@ export default function AdminPanel({
                   {/* Filter Pills */}
                   <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                     {[
-                      { id: "all", label: `Sabhi Other PS (${totalOtherPsCount})` },
+                      { id: "all", label: `Sabhi (${otherPsFilter === "all_videos" ? totalAllVideosCount : (otherPsFilter === "our_all" ? ourServerOnlyCount : totalOtherPsCount)})` },
                       { id: "pending", label: `⚠️ Pending Sync (${pendingOtherPsCount})`, warn: pendingOtherPsCount > 0 },
                       { id: "synced", label: `✓ Synced in R2 (${syncedOtherPsCount})` },
                       { id: "active_our_server", label: `☁️ Streaming Our Server (${ourServerStreamCount})` },
@@ -5584,48 +5675,182 @@ export default function AdminPanel({
                   </div>
                 </div>
 
-                {/* Quick Selection Toolbar (Counting Wise & Date Wise) */}
-                <div style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: "10px", border: "1px solid #e2e8f0", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
-                  {/* Counting Selection Buttons */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#475569" }}>Quick Select:</span>
+                {/* Rules & Scope Execution Controls Toolbar */}
+                <div style={{ background: "#f8fafc", padding: "14px 16px", borderRadius: "10px", border: "1px solid #e2e8f0", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+                    {/* Rules Scope Selection */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "#1e293b" }}>Rules Logic (Apply to):</span>
+
+                      {/* 1. Latest N */}
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.82rem", fontWeight: 600, color: otherPsScopeMode === "latest" ? "#2563eb" : "#475569", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="scopeMode"
+                          checked={otherPsScopeMode === "latest"}
+                          onChange={() => setOtherPsScopeMode("latest")}
+                        />
+                        <span>Latest</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="1000"
+                          value={otherPsLatestCount}
+                          onChange={(e) => setOtherPsLatestCount(e.target.value)}
+                          onFocus={() => setOtherPsScopeMode("latest")}
+                          style={{ width: "60px", padding: "3px 6px", fontSize: "0.8rem", borderRadius: "4px", border: "1px solid #cbd5e1" }}
+                          placeholder="Count"
+                        />
+                      </label>
+
+                      {/* 2. All */}
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.82rem", fontWeight: 600, color: otherPsScopeMode === "all" ? "#2563eb" : "#475569", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="scopeMode"
+                          checked={otherPsScopeMode === "all"}
+                          onChange={() => setOtherPsScopeMode("all")}
+                        />
+                        <span>All ({getFilteredOtherPsVideos().length})</span>
+                      </label>
+
+                      {/* 3. Selected */}
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.82rem", fontWeight: 600, color: otherPsScopeMode === "selected" ? "#2563eb" : "#475569", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="scopeMode"
+                          checked={otherPsScopeMode === "selected"}
+                          onChange={() => setOtherPsScopeMode("selected")}
+                        />
+                        <span>Selected ({selectedOtherPsIds.length})</span>
+                      </label>
+
+                      {/* 4. Date Range */}
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.82rem", fontWeight: 600, color: otherPsScopeMode === "date" ? "#2563eb" : "#475569", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="scopeMode"
+                          checked={otherPsScopeMode === "date"}
+                          onChange={() => setOtherPsScopeMode("date")}
+                        />
+                        <span>Date:</span>
+                        <input
+                          type="date"
+                          value={otherPsStartDate}
+                          onChange={(e) => {
+                            setOtherPsStartDate(e.target.value);
+                            setOtherPsScopeMode("date");
+                          }}
+                          style={{ padding: "3px 6px", fontSize: "0.78rem", borderRadius: "4px", border: "1px solid #cbd5e1" }}
+                        />
+                        <span style={{ fontSize: "0.75rem", color: "#64748b" }}>to</span>
+                        <input
+                          type="date"
+                          value={otherPsEndDate}
+                          onChange={(e) => {
+                            setOtherPsEndDate(e.target.value);
+                            setOtherPsScopeMode("date");
+                          }}
+                          style={{ padding: "3px 6px", fontSize: "0.78rem", borderRadius: "4px", border: "1px solid #cbd5e1" }}
+                        />
+                      </label>
+                    </div>
+
+                    {/* Action Execution Buttons for chosen Scope */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="vap-btn-primary"
+                        onClick={handleApplyScopeSync}
+                        disabled={isSyncingStorage}
+                        style={{ background: "#16a34a", padding: "7px 14px", fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "6px" }}
+                        title="Download chosen scope of videos into Cloudflare R2"
+                      >
+                        <Zap size={14} />
+                        <span>Sync to Our Storage</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="vap-btn-secondary"
+                        onClick={() => handleApplyScopeSource("our_server")}
+                        disabled={isSwitchingSource}
+                        style={{ padding: "7px 14px", fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "6px" }}
+                        title="Run chosen videos from Our Server (Fast R2 Streaming)"
+                      >
+                        <Server size={14} />
+                        <span>Stream from Our Server</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="vap-btn-secondary"
+                        onClick={() => handleApplyScopeSource("other_ps")}
+                        disabled={isSwitchingSource}
+                        style={{ padding: "7px 14px", fontSize: "0.82rem", display: "flex", alignItems: "center", gap: "6px" }}
+                        title="Run chosen videos from Other Person's Server"
+                      >
+                        <LinkIcon size={14} />
+                        <span>Stream from Other PS</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Select Checkbox Helpers */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #e2e8f0", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#64748b" }}>Quick Checkbox Select:</span>
                     <button
                       type="button"
-                      onClick={() => handleSelectCount(10)}
+                      onClick={() => {
+                        handleSelectCount(10);
+                        setOtherPsScopeMode("selected");
+                      }}
                       className="vap-btn-secondary"
-                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                      style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px" }}
                     >
                       First 10
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleSelectCount(25)}
+                      onClick={() => {
+                        handleSelectCount(25);
+                        setOtherPsScopeMode("selected");
+                      }}
                       className="vap-btn-secondary"
-                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                      style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px" }}
                     >
                       First 25
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleSelectCount(50)}
+                      onClick={() => {
+                        handleSelectCount(50);
+                        setOtherPsScopeMode("selected");
+                      }}
                       className="vap-btn-secondary"
-                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                      style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px" }}
                     >
                       First 50
                     </button>
                     <button
                       type="button"
-                      onClick={handleSelectAllPending}
+                      onClick={() => {
+                        handleSelectAllPending();
+                        setOtherPsScopeMode("selected");
+                      }}
                       className="vap-btn-secondary"
-                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px", color: "#d97706", borderColor: "#fde68a" }}
+                      style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px", color: "#d97706", borderColor: "#fde68a" }}
                     >
                       All Pending ({pendingOtherPsCount})
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSelectedOtherPsIds(getFilteredOtherPsVideos().map((v) => v.id))}
+                      onClick={() => {
+                        setSelectedOtherPsIds(getFilteredOtherPsVideos().map((v) => v.id));
+                        setOtherPsScopeMode("selected");
+                      }}
                       className="vap-btn-secondary"
-                      style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px" }}
+                      style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px" }}
                     >
                       Select All Visible ({getFilteredOtherPsVideos().length})
                     </button>
@@ -5634,45 +5859,14 @@ export default function AdminPanel({
                         type="button"
                         onClick={() => setSelectedOtherPsIds([])}
                         className="vap-btn-secondary"
-                        style={{ padding: "4px 10px", fontSize: "0.78rem", borderRadius: "6px", color: "#ef4444" }}
+                        style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px", color: "#ef4444" }}
                       >
                         Clear Selection
                       </button>
                     )}
                   </div>
-
-                  {/* Date Range Selection */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                    <Calendar size={14} style={{ color: "#64748b" }} />
-                    <input
-                      type="date"
-                      value={otherPsStartDate}
-                      onChange={(e) => setOtherPsStartDate(e.target.value)}
-                      style={{ padding: "4px 8px", fontSize: "0.78rem", borderRadius: "6px", border: "1px solid #cbd5e1" }}
-                    />
-                    <span style={{ fontSize: "0.78rem", color: "#64748b" }}>to</span>
-                    <input
-                      type="date"
-                      value={otherPsEndDate}
-                      onChange={(e) => setOtherPsEndDate(e.target.value)}
-                      style={{ padding: "4px 8px", fontSize: "0.78rem", borderRadius: "6px", border: "1px solid #cbd5e1" }}
-                    />
-                    {(otherPsStartDate || otherPsEndDate) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOtherPsStartDate("");
-                          setOtherPsEndDate("");
-                        }}
-                        style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "0.78rem" }}
-                      >
-                        Reset Date
-                      </button>
-                    )}
-                  </div>
                 </div>
 
-                {/* Bulk Actions Bar when items selected */}
                 {selectedOtherPsIds.length > 0 && (
                   <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", padding: "10px 16px", borderRadius: "8px", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -5900,7 +6094,7 @@ export default function AdminPanel({
                               {/* Row Actions */}
                               <td style={{ textAlign: "right" }}>
                                 <div style={{ display: "inline-flex", gap: "6px" }}>
-                                  {!isSynced ? (
+                                  {!isSynced && (
                                     <button
                                       type="button"
                                       className="vap-btn-primary"
@@ -5912,42 +6106,15 @@ export default function AdminPanel({
                                       <Zap size={13} />
                                       <span>Sync to Storage</span>
                                     </button>
-                                  ) : (
-                                    <span
-                                      style={{
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        gap: "4px",
-                                        color: "#16a34a",
-                                        fontWeight: 600,
-                                        fontSize: "0.78rem",
-                                        padding: "4px 8px",
-                                        background: "#dcfce7",
-                                        borderRadius: "6px"
-                                      }}
-                                      title="File is permanently saved in Cloudflare R2 storage"
-                                    >
-                                      <CheckCircle2 size={13} />
-                                      <span>Synced</span>
-                                    </span>
                                   )}
 
                                   <button
                                     type="button"
                                     className="vap-icon-btn"
-                                    onClick={() => handleEditVideoClick(v)}
+                                    onClick={() => handleStartEdit(v)}
                                     title="Edit video"
                                   >
-                                    <Pencil size={14} />
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    className="vap-icon-btn danger"
-                                    onClick={() => handleDeleteVideoClick(v)}
-                                    title="Delete video"
-                                  >
-                                    <Trash2 size={14} />
+                                    <Pencil size={15} />
                                   </button>
                                 </div>
                               </td>
