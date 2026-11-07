@@ -162,9 +162,9 @@ export default function AdminPanel({
   const [singleThumbnail, setSingleThumbnail] = useState("");
   const [singleThumbnailFile, setSingleThumbnailFile] = useState(null);
   const [singleThumbnailUrl, setSingleThumbnailUrl] = useState("");
-  const [singleDuration, setSingleDuration] = useState("");
-  const [singleInitialViews, setSingleInitialViews] = useState("");
-  const [singleInitialLikes, setSingleInitialLikes] = useState("");
+  const [singleDuration, setSingleDuration] = useState("00:00");
+  const [singleInitialViews, setSingleInitialViews] = useState("0");
+  const [singleInitialLikes, setSingleInitialLikes] = useState("0");
   const [singlePrivacy, setSinglePrivacy] = useState("public");
   const [isUploadingSingle, setIsUploadingSingle] = useState(false);
   const [singleUploadProgress, setSingleUploadProgress] = useState(0);
@@ -498,18 +498,26 @@ export default function AdminPanel({
   const handleSingleFileSelect = async (file) => {
     if (!file) return;
     setSingleFile(file);
+    // Clear link when file is chosen
+    setSingleVideoUrl("");
+    setLinkUrl("");
 
     // Auto-fill title if empty
     if (!singleTitle) {
       const cleanName = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
       setSingleTitle(cleanName);
+      setLinkTitle(cleanName);
     }
 
     // Auto-detect duration and thumbnail frame
     const meta = await detectVideoMeta(file);
-    if (meta.duration) setSingleDuration(meta.duration);
+    if (meta.duration) {
+      setSingleDuration(meta.duration);
+      setLinkDuration(meta.duration);
+    }
     if (meta.thumbnail && !singleThumbnail && !singleThumbnailUrl) {
       setSingleThumbnail(meta.thumbnail);
+      setSingleThumbnailUrl(meta.thumbnail);
     }
   };
 
@@ -520,14 +528,22 @@ export default function AdminPanel({
       clean = iframeMatch[1];
     }
     setSingleVideoUrl(clean);
+    setLinkUrl(clean);
+
+    if (clean) {
+      // Clear local file when video link is entered
+      setSingleFile(null);
+      if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
+    }
 
     // Auto extract YouTube ID and thumbnail
     const ytMatch = clean.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
     if (ytMatch && ytMatch[1]) {
       const ytId = ytMatch[1];
-      if (!singleThumbnail && !singleThumbnailUrl) {
-        setSingleThumbnail(`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`);
-      }
+      const ytThumb = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+      setSingleThumbnail(ytThumb);
+      setSingleThumbnailUrl(ytThumb);
+      setLinkThumbnail(ytThumb);
     }
 
     // Auto suggest clean title from URL if title is empty
@@ -535,6 +551,7 @@ export default function AdminPanel({
       const suggested = cleanDisplayTitle(clean);
       if (suggested && suggested !== "Untitled Video") {
         setSingleTitle(suggested);
+        setLinkTitle(suggested);
       }
     }
 
@@ -543,9 +560,11 @@ export default function AdminPanel({
       detectVideoMeta(clean).then((meta) => {
         if (meta.duration) {
           setSingleDuration(meta.duration);
+          setLinkDuration(meta.duration);
         }
         if (meta.thumbnail && !singleThumbnail && !singleThumbnailUrl) {
           setSingleThumbnail(meta.thumbnail);
+          setSingleThumbnailUrl(meta.thumbnail);
         }
       });
     }
@@ -564,6 +583,8 @@ export default function AdminPanel({
     }
     setSingleVideoUrl(target);
     setLinkUrl(target);
+    setSingleFile(null);
+    if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
 
     setIsFetchingMeta(true);
     try {
@@ -601,12 +622,10 @@ export default function AdminPanel({
           setSingleTags(fallbackTags);
           setLinkTags(fallbackTags);
         }
-        const defaultViews = data.views ? String(data.views) : String(Math.floor(Math.random() * 4000) + 1500);
-        const defaultLikes = data.likes ? String(data.likes) : String(Math.floor(Number(defaultViews) * 0.94));
-        setSingleInitialViews(defaultViews);
-        setLinkInitialViews(defaultViews);
-        setSingleInitialLikes(defaultLikes);
-        setLinkInitialLikes(defaultLikes);
+        setSingleInitialViews("0");
+        setLinkInitialViews("0");
+        setSingleInitialLikes("0");
+        setLinkInitialLikes("0");
 
         showSuccess("✓ Video title, thumbnail, duration, category & tags auto-fetched!");
       } else {
@@ -626,16 +645,10 @@ export default function AdminPanel({
             setLinkThumbnail(meta.thumbnail);
           }
         });
-        const defaultViews = String(Math.floor(Math.random() * 4000) + 1500);
-        const defaultLikes = String(Math.floor(Number(defaultViews) * 0.94));
-        if (!singleInitialViews) {
-          setSingleInitialViews(defaultViews);
-          setLinkInitialViews(defaultViews);
-        }
-        if (!singleInitialLikes) {
-          setSingleInitialLikes(defaultLikes);
-          setLinkInitialLikes(defaultLikes);
-        }
+        setSingleInitialViews("0");
+        setLinkInitialViews("0");
+        setSingleInitialLikes("0");
+        setLinkInitialLikes("0");
         if (singleTags.length === 0) {
           setSingleTags(["Viral", "Trending", "HD"]);
           setLinkTags(["Viral", "Trending", "HD"]);
@@ -662,11 +675,10 @@ export default function AdminPanel({
           setLinkTitle(suggested);
         }
       }
-      if (!singleInitialViews) {
-        const dV = String(Math.floor(Math.random() * 4000) + 1500);
-        setSingleInitialViews(dV);
-        setSingleInitialLikes(String(Math.floor(Number(dV) * 0.94)));
-      }
+      setSingleInitialViews("0");
+      setLinkInitialViews("0");
+      setSingleInitialLikes("0");
+      setLinkInitialLikes("0");
       if (singleTags.length === 0) {
         setSingleTags(["Viral", "Trending"]);
       }
@@ -693,18 +705,32 @@ export default function AdminPanel({
     setSingleUploadSuccessVideo(null);
     setSingleUploadError("");
 
-    if (!singleTitle.trim()) {
-      showError("Please enter a video title.");
-      return;
-    }
+    const currentUrl = (singleVideoUrl || linkUrl || "").trim();
+    const isLocalUpload = Boolean(singleFile);
 
-    const currentUrl = (singleVideoUrl || linkUrl).trim();
-    if (!singleFile && !currentUrl) {
+    if (!isLocalUpload && !currentUrl) {
       showError("Please enter a Video Link or select a Local Video File.");
       return;
     }
 
-    const isLocalUpload = Boolean(singleFile);
+    // Auto-detect title from link or file name if not typed
+    let finalTitle = (singleTitle || linkTitle || "").trim();
+    if (!finalTitle) {
+      if (isLocalUpload && singleFile) {
+        finalTitle = singleFile.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
+      } else if (currentUrl) {
+        finalTitle = cleanDisplayTitle(currentUrl) || "Stream Video";
+      }
+      if (finalTitle) {
+        setSingleTitle(finalTitle);
+        setLinkTitle(finalTitle);
+      }
+    }
+
+    if (!finalTitle) {
+      showError("Please enter a video title.");
+      return;
+    }
 
     // Instant duplicate link check
     if (!isLocalUpload && currentUrl) {
@@ -715,6 +741,19 @@ export default function AdminPanel({
       }
     }
 
+    // Duration fallback
+    let finalDuration = (singleDuration || "").trim();
+    if (!finalDuration || finalDuration === "00:00") {
+      if (videoDurationSecs) {
+        finalDuration = formatSecsToTime(videoDurationSecs);
+      } else {
+        finalDuration = "00:00";
+      }
+    }
+
+    const initialViewsNum = parseInt(singleInitialViews, 10) || 0;
+    const initialLikesNum = parseInt(singleInitialLikes, 10) || 0;
+
     const historyId = `up-${Date.now()}`;
     const uploadMethod = isLocalUpload ? "Single Upload (File)" : "Upload via Link";
     const fileNameDesc = isLocalUpload ? singleFile.name : currentUrl;
@@ -722,11 +761,11 @@ export default function AdminPanel({
 
     uploadHistory.addItem({
       id: historyId,
-      title: singleTitle.trim(),
+      title: finalTitle,
       type: uploadMethod,
       fileName: fileNameDesc,
       fileSize: sizeStr,
-      duration: singleDuration.trim(),
+      duration: finalDuration,
       thumbnail: singleThumbnailUrl.trim() || singleThumbnail || linkThumbnail || FALLBACK_THUMBNAIL,
       status: "uploading",
       progress: 10,
@@ -825,9 +864,9 @@ export default function AdminPanel({
       setSingleThumbnail("");
       setSingleThumbnailFile(null);
       setSingleThumbnailUrl("");
-      setSingleInitialViews("");
-      setSingleInitialLikes("");
-      setSingleDuration("");
+      setSingleInitialViews("0");
+      setSingleInitialLikes("0");
+      setSingleDuration("00:00");
       setSinglePrivacy("public");
 
       // Reload stats & videos
@@ -2630,25 +2669,27 @@ export default function AdminPanel({
                       )}
                     </div>
 
-                    {/* 2. Local File Select (Ise me preview aa jayega) */}
+                    {/* 2. Video Preview & Local File Select */}
                     <div className="vap-form-group" style={{ margin: 0 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                         <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem", display: "flex", alignItems: "center", gap: "6px" }}>
                           <UploadCloud size={15} color="#2563eb" />
-                          <span>Local file select (Preview)</span>
+                          <span>Video Preview {singleFile ? "(Local File)" : (singleVideoUrl ? "(Link Preview)" : "")}</span>
                         </label>
-                        {singleFile && (
+                        {(singleFile || singleVideoUrl) && (
                           <button
                             type="button"
                             onClick={() => {
                               setSingleFile(null);
+                              setSingleVideoUrl("");
+                              setLinkUrl("");
                               setVideoDurationSecs(0);
                               setCurrentScrubTime(0);
                               if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
                             }}
                             style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
                           >
-                            <Trash2 size={12} /> Remove Video
+                            <Trash2 size={12} /> Clear Video
                           </button>
                         )}
                       </div>
@@ -2661,8 +2702,8 @@ export default function AdminPanel({
                         onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
                       />
 
+                      {/* Condition 1: Local File Selected */}
                       {singleFile ? (
-                        /* Embedded Local Video Player Preview + Timeline Frame Scrubber */
                         <div style={{ background: "#0f172a", borderRadius: "10px", padding: "12px", border: "1.5px solid #334155" }}>
                           <video
                             ref={videoPlayerRef}
@@ -2673,7 +2714,7 @@ export default function AdminPanel({
                             onLoadedMetadata={(e) => {
                               const d = e.target.duration || 0;
                               setVideoDurationSecs(d);
-                              if (!singleDuration) {
+                              if (!singleDuration || singleDuration === "00:00") {
                                 setSingleDuration(formatSecsToTime(d));
                               }
                             }}
@@ -2683,14 +2724,14 @@ export default function AdminPanel({
                           />
                           <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
                             <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>
-                              ✓ {singleFile.name}
+                              ✓ Local File: {singleFile.name}
                             </span>
                             <span style={{ color: "#94a3b8" }}>
                               {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {videoDurationSecs ? `| ${formatSecsToTime(videoDurationSecs)}` : ""}
                             </span>
                           </div>
 
-                          {/* Timeline Frame Capture Control (Select Thumbnail from Video Duration) */}
+                          {/* Timeline Frame Scrubber */}
                           <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #1e293b" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
                               <span style={{ color: "#cbd5e1", fontSize: "0.78rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
@@ -2701,7 +2742,6 @@ export default function AdminPanel({
                               </span>
                             </div>
 
-                            {/* Scrub range slider */}
                             <input
                               type="range"
                               min={0}
@@ -2718,7 +2758,6 @@ export default function AdminPanel({
                               style={{ width: "100%", accentColor: "#2563eb", cursor: "pointer", height: "6px" }}
                             />
 
-                            {/* Quick Jump Buttons & Capture Button */}
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px", gap: "6px", flexWrap: "wrap" }}>
                               <div style={{ display: "flex", gap: "4px" }}>
                                 {[
@@ -2775,8 +2814,114 @@ export default function AdminPanel({
                             </div>
                           </div>
                         </div>
+                      ) : singleVideoUrl ? (
+                        /* Condition 2: Video Link provided (YouTube or Direct Link Preview) */
+                        (() => {
+                          const ytMatch = singleVideoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+                          const ytId = ytMatch ? ytMatch[1] : null;
+
+                          return (
+                            <div style={{ background: "#0f172a", borderRadius: "10px", padding: "12px", border: "1.5px solid #334155" }}>
+                              {ytId ? (
+                                <div style={{ position: "relative", width: "100%", aspectRatio: "16 / 9", maxHeight: "200px", borderRadius: "6px", overflow: "hidden", background: "#000" }}>
+                                  <iframe
+                                    src={`https://www.youtube.com/embed/${ytId}`}
+                                    title="YouTube Preview"
+                                    style={{ width: "100%", height: "100%", border: "none" }}
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                    allowFullScreen
+                                  />
+                                </div>
+                              ) : (
+                                <video
+                                  ref={videoPlayerRef}
+                                  src={cleanVideoUrl(singleVideoUrl)}
+                                  controls
+                                  crossOrigin="anonymous"
+                                  style={{ width: "100%", maxHeight: "200px", borderRadius: "6px", background: "#000", display: "block" }}
+                                  onLoadedMetadata={(e) => {
+                                    const d = e.target.duration || 0;
+                                    setVideoDurationSecs(d);
+                                    if (!singleDuration || singleDuration === "00:00") {
+                                      setSingleDuration(formatSecsToTime(d));
+                                    }
+                                  }}
+                                  onTimeUpdate={(e) => {
+                                    setCurrentScrubTime(e.target.currentTime);
+                                  }}
+                                />
+                              )}
+
+                              <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
+                                <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "65%" }}>
+                                  ✓ Link Connected: {ytId ? `YouTube (${ytId})` : cleanDisplayTitle(singleVideoUrl)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => singleVideoInputRef.current?.click()}
+                                  style={{ background: "#1e293b", border: "1px solid #475569", color: "#93c5fd", borderRadius: "4px", padding: "3px 8px", fontSize: "0.74rem", cursor: "pointer" }}
+                                >
+                                  Switch to Local File
+                                </button>
+                              </div>
+
+                              {/* Timeline Frame Scrubber for direct video links */}
+                              {!ytId && (
+                                <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #1e293b" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                                    <span style={{ color: "#cbd5e1", fontSize: "0.78rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                                      <Film size={13} color="#38bdf8" /> Video Timeline Scrubber:
+                                    </span>
+                                    <span style={{ color: "#38bdf8", fontSize: "0.78rem", fontFamily: "monospace", fontWeight: 700 }}>
+                                      {formatSecsToTime(currentScrubTime)} / {formatSecsToTime(videoDurationSecs)}
+                                    </span>
+                                  </div>
+
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={videoDurationSecs || 100}
+                                    step={0.1}
+                                    value={currentScrubTime}
+                                    onChange={(e) => {
+                                      const t = parseFloat(e.target.value) || 0;
+                                      setCurrentScrubTime(t);
+                                      if (videoPlayerRef.current) {
+                                        videoPlayerRef.current.currentTime = t;
+                                      }
+                                    }}
+                                    style={{ width: "100%", accentColor: "#2563eb", cursor: "pointer", height: "6px" }}
+                                  />
+
+                                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "8px" }}>
+                                    <button
+                                      type="button"
+                                      onClick={handleCaptureCurrentVideoFrame}
+                                      style={{
+                                        background: "#2563eb",
+                                        color: "#ffffff",
+                                        border: "none",
+                                        borderRadius: "5px",
+                                        padding: "5px 10px",
+                                        fontSize: "0.78rem",
+                                        fontWeight: 600,
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "5px",
+                                        cursor: "pointer"
+                                      }}
+                                    >
+                                      <Camera size={13} />
+                                      <span>Capture Frame as Thumbnail</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()
                       ) : (
-                        /* Local File Select Dropzone */
+                        /* Condition 3: Neither file nor link - Dropzone */
                         <div
                           className="vap-dropzone"
                           onClick={() => singleVideoInputRef.current?.click()}
@@ -2792,7 +2937,7 @@ export default function AdminPanel({
                             Choose Local Video File or Drag & Drop Here
                           </div>
                           <span className="vap-dropzone-sub" style={{ fontSize: "0.76rem", marginTop: "4px" }}>
-                            MP4, MOV, MKV, WEBM (Preview will appear right here)
+                            MP4, MOV, MKV, WEBM (Or paste video link in the box above)
                           </span>
                         </div>
                       )}
@@ -3021,15 +3166,15 @@ export default function AdminPanel({
                       </div>
                     )}
 
-                    {/* Duration / Views / Likes */}
+                    {/* Duration / Views / Likes (Defaults to 00:00, 0, 0) */}
                     {singleSourceType !== "excel" && (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
                         <div className="vap-form-group">
-                          <label>Duration</label>
+                          <label>Duration <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: 00:00)</span></label>
                           <input
                             type="text"
                             className="vap-input"
-                            placeholder="MM:SS"
+                            placeholder="00:00"
                             value={singleDuration}
                             onChange={(e) => {
                               setSingleDuration(e.target.value);
@@ -3038,7 +3183,7 @@ export default function AdminPanel({
                           />
                         </div>
                         <div className="vap-form-group">
-                          <label>Views</label>
+                          <label>Views <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: 0)</span></label>
                           <input
                             type="number"
                             className="vap-input"
@@ -3051,7 +3196,7 @@ export default function AdminPanel({
                           />
                         </div>
                         <div className="vap-form-group">
-                          <label>Likes</label>
+                          <label>Likes <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: 0)</span></label>
                           <input
                             type="number"
                             className="vap-input"
