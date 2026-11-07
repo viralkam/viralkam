@@ -28,7 +28,8 @@ import {
   Tag,
   Server,
   Zap,
-  RefreshCw
+  RefreshCw,
+  Camera
 } from "lucide-react";
 import { api } from "../services/api";
 import { uploadHistory } from "../services/uploadHistory";
@@ -124,7 +125,32 @@ export default function AdminPanel({
 
   // Single Upload Form State (supports both local file upload & direct CDN link)
   const [singleSourceType, setSingleSourceType] = useState("file"); // "file" | "link" | "excel"
-  const [saveToServer, setSaveToServer] = useState(true);
+  const [saveToServer, setSaveToServer] = useState(() => {
+    try {
+      const stored = localStorage.getItem("vk_save_to_server");
+      return stored !== null ? stored === "true" : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleSaveToServer = (val) => {
+    const nextVal = val !== undefined ? val : !saveToServer;
+    setSaveToServer(nextVal);
+    try {
+      localStorage.setItem("vk_save_to_server", String(nextVal));
+    } catch {}
+  };
+
+  // Video scrubber and frame capture states
+  const [videoDurationSecs, setVideoDurationSecs] = useState(0);
+  const [currentScrubTime, setCurrentScrubTime] = useState(0);
+  const videoPlayerRef = useRef(null);
+
+  // Excel Import Modal State
+  const [showImportExcelModal, setShowImportExcelModal] = useState(false);
+  const [lastSkippedRows, setLastSkippedRows] = useState([]);
+  const [excelImportStep, setExcelImportStep] = useState("");
   const [isFetchingMeta, setIsFetchingMeta] = useState(false);
   const [singleFile, setSingleFile] = useState(null);
   const [singleVideoUrl, setSingleVideoUrl] = useState("");
@@ -371,6 +397,101 @@ export default function AdminPanel({
     });
   };
 
+  const formatSecsToTime = (totalSec) => {
+    const sec = Math.floor(totalSec) || 0;
+    if (sec <= 0) return "00:00";
+    const hrs = Math.floor(sec / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    const remSec = sec % 60;
+    if (hrs > 0) {
+      return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
+    }
+    return `${String(mins).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
+  };
+
+  // Instant duplicate check (<1ms) against published videos
+  const checkDuplicateVideo = (targetUrl) => {
+    if (!targetUrl || typeof targetUrl !== "string") return null;
+    const cleanTarget = cleanVideoUrl(targetUrl).trim();
+    if (!cleanTarget || cleanTarget === "https://vjs.zencdn.net/v/oceans.mp4") return null;
+
+    const ytMatch = cleanTarget.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+    const ytId = ytMatch ? ytMatch[1] : null;
+
+    const listToSearch = allExportVideos.length > 0 ? allExportVideos : (videosList.length > 0 ? videosList : initialVideos);
+
+    for (const item of listToSearch) {
+      if (!item || !item.videoUrl) continue;
+      const itemUrl = cleanVideoUrl(item.videoUrl).trim();
+      if (itemUrl.toLowerCase() === cleanTarget.toLowerCase()) {
+        return item;
+      }
+      if (ytId && itemUrl.includes(ytId)) {
+        return item;
+      }
+      try {
+        const u1 = new URL(cleanTarget).pathname;
+        const u2 = new URL(itemUrl).pathname;
+        if (u1 && u2 && u1 === u2 && u1 !== "/" && !u1.endsWith("oceans.mp4")) {
+          return item;
+        }
+      } catch {}
+    }
+    return null;
+  };
+
+  // Capture video frame at current scrub time as thumbnail
+  const handleCaptureCurrentVideoFrame = () => {
+    const vid = videoPlayerRef.current;
+    if (!vid) {
+      showError("Video player is not ready yet.");
+      return;
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = vid.videoWidth || 640;
+      canvas.height = vid.videoHeight || 360;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+      setSingleThumbnail(dataUrl);
+      setSingleThumbnailUrl(dataUrl);
+      setLinkThumbnail(dataUrl);
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const file = new File([blob], `thumb-${Math.floor(vid.currentTime)}s.jpg`, { type: "image/jpeg" });
+          setSingleThumbnailFile(file);
+        }
+      }, "image/jpeg", 0.88);
+      showSuccess(`✓ Frame captured at ${formatSecsToTime(vid.currentTime)} as thumbnail!`);
+    } catch (err) {
+      console.warn("Capture frame error:", err);
+      showError("Could not capture frame: " + err.message);
+    }
+  };
+
+  // Export Skipped / Duplicate rows as Excel sheet
+  const handleExportSkippedExcel = (customList) => {
+    const rows = (customList || lastSkippedRows || []).map((r, i) => ({
+      "Row": r.rowNum || (i + 1),
+      "Video URL": r.videoUrl || "",
+      "Title": r.title || "",
+      "Status": r.isDuplicate ? "Already Published (Skipped)" : "Validation Error",
+      "Existing Video Match": r.duplicateTitle || r.duplicateOf || "Found in Database",
+      "Category": r.category || "",
+      "Tags": Array.isArray(r.tags) ? r.tags.join(", ") : (r.tags || "")
+    }));
+    if (rows.length === 0) {
+      showError("No skipped rows to export.");
+      return;
+    }
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Skipped_Videos");
+    XLSX.writeFile(wb, `skipped_unpublished_videos_${Date.now()}.xlsx`);
+    showSuccess(`✓ Downloaded ${rows.length} skipped videos to Excel!`);
+  };
+
   // ==========================================
   // SINGLE UPLOAD HANDLERS
   // ==========================================
@@ -577,11 +698,6 @@ export default function AdminPanel({
       return;
     }
 
-    if (singleSourceType === "file" && !singleFile) {
-      showError("Please select a video file from your device.");
-      return;
-    }
-
     const currentUrl = (singleVideoUrl || linkUrl).trim();
     if (!singleFile && !currentUrl) {
       showError("Please enter a Video Link or select a Local Video File.");
@@ -589,6 +705,16 @@ export default function AdminPanel({
     }
 
     const isLocalUpload = Boolean(singleFile);
+
+    // Instant duplicate link check
+    if (!isLocalUpload && currentUrl) {
+      const dup = checkDuplicateVideo(currentUrl);
+      if (dup) {
+        const proceed = window.confirm(`⚠️ Notice: This video is already published as "${dup.title}".\n\nDo you still want to publish it again?`);
+        if (!proceed) return;
+      }
+    }
+
     const historyId = `up-${Date.now()}`;
     const uploadMethod = isLocalUpload ? "Single Upload (File)" : "Upload via Link";
     const fileNameDesc = isLocalUpload ? singleFile.name : currentUrl;
@@ -1031,37 +1157,28 @@ export default function AdminPanel({
   const handleDownloadExcelTemplate = () => {
     const templateData = [
       {
+        "Video URL": "https://vjs.zencdn.net/v/oceans.mp4",
+        "Thumbnail URL": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800",
         "Title": "Sunset Over Mountain 4K",
         "Description": "Cinematic 4K mountain sunset view with calming ambience.",
         "Category": "Nature",
         "Tags": "sunset, nature, 4k, cinematic",
-        "Video URL": "https://vjs.zencdn.net/v/oceans.mp4",
         "Duration": "04:30",
-        "Initial Views": 1500,
-        "Initial Likes": 120,
+        "Initial Views": 0,
+        "Initial Likes": 0,
         "Privacy": "Public"
       },
       {
-        "Title": "Full Body Workout at Home",
-        "Description": "Quick 10-minute high intensity workout routine.",
-        "Category": "Fitness",
-        "Tags": "fitness, workout, health",
-        "Video URL": "https://vjs.zencdn.net/v/oceans.mp4",
-        "Duration": "10:15",
-        "Initial Views": 500,
-        "Initial Likes": 45,
+        "Video URL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "Thumbnail URL": "",
+        "Title": "",
+        "Description": "",
+        "Category": "",
+        "Tags": "",
+        "Duration": "",
+        "Initial Views": 0,
+        "Initial Likes": 0,
         "Privacy": "Public"
-      },
-      {
-        "Title": "Private Team Architecture Brief",
-        "Description": "Internal roadmap and deployment instructions.",
-        "Category": "General",
-        "Tags": "internal, roadmap",
-        "Video URL": "https://vjs.zencdn.net/v/oceans.mp4",
-        "Duration": "15:00",
-        "Initial Views": 10,
-        "Initial Likes": 2,
-        "Privacy": "Private"
       }
     ];
 
@@ -1345,7 +1462,7 @@ export default function AdminPanel({
           const description = findVal(["Description", "Desc", "Summary"]);
           const category = findVal(["Category", "Cat"]) || "General";
           const tagsStr = findVal(["Tags", "Tag", "Keywords"]);
-          let videoUrl = findVal(["Video URL", "VideoUrl", "URL", "Link"]);
+          let videoUrl = findVal(["Video URL", "VideoUrl", "URL", "Link", "Video"]);
           const duration = findVal(["Duration", "Time", "Length"]) || "";
           const initialViews = findVal(["Initial Views", "Views", "InitialViews"]);
           const initialLikes = findVal(["Initial Likes", "Likes", "InitialLikes"]);
@@ -1362,19 +1479,22 @@ export default function AdminPanel({
             title = cleanDisplayTitle(title);
           }
 
-          videoUrl = cleanVideoUrl(videoUrl, "https://vjs.zencdn.net/v/oceans.mp4");
+          if (!videoUrl) {
+            rowErrors.push("Video URL is required");
+          } else {
+            videoUrl = cleanVideoUrl(videoUrl, "https://vjs.zencdn.net/v/oceans.mp4");
+          }
 
-          if (!title) {
-            rowErrors.push("Title is required");
+          if (!title && videoUrl) {
+            title = cleanDisplayTitle(videoUrl) || "Auto-detect from link";
           }
 
           const privacyClean = privacyRaw.toLowerCase() === "private" ? "private" : "public";
 
-          if (privacyRaw && !["public", "private"].includes(privacyRaw.toLowerCase())) {
-            rowErrors.push(`Invalid Privacy '${privacyRaw}' (must be Public or Private)`);
-          }
-
           const tags = tagsStr ? tagsStr.split(",").map((t) => t.trim()).filter(Boolean) : [category];
+
+          // Check if video link is already in database
+          const duplicateMatch = videoUrl ? checkDuplicateVideo(videoUrl) : null;
 
           const item = {
             rowNum,
@@ -1382,12 +1502,14 @@ export default function AdminPanel({
             description,
             category,
             tags,
-            videoUrl: videoUrl || "https://vjs.zencdn.net/v/oceans.mp4",
-            thumbnail: thumbnailRaw || FALLBACK_THUMBNAIL,
+            videoUrl: videoUrl || "",
+            thumbnail: thumbnailRaw || "",
             duration: duration || "",
             initialViews: parseInt(initialViews, 10) || 0,
             initialLikes: parseInt(initialLikes, 10) || 0,
             privacy: privacyClean,
+            isDuplicate: Boolean(duplicateMatch),
+            duplicateTitle: duplicateMatch ? duplicateMatch.title : "",
             isValid: rowErrors.length === 0,
             errors: rowErrors
           };
@@ -1408,33 +1530,97 @@ export default function AdminPanel({
   };
 
   const handleImportExcelVideos = async () => {
-    const validRows = excelParsedRows.filter((r) => r.isValid);
-    if (validRows.length === 0) {
-      showError("No valid rows found to import.");
+    if (excelParsedRows.length === 0) {
+      showError("Please select an Excel file first.");
       return;
+    }
+
+    // Confirmation if saveToServer is ON
+    if (saveToServer) {
+      const ok = window.confirm(
+        "Notice: Save in Server Storage is ON.\n\nAll videos from this Excel sheet will be downloaded and permanently saved into your Server Storage (Cloudflare R2 / Uploads).\n\nClick OK to proceed, or Cancel to stop."
+      );
+      if (!ok) return;
     }
 
     setIsImportingExcel(true);
     setExcelProgress(0);
 
+    const skippedList = [];
+    const rowsToImport = [];
+
+    excelParsedRows.forEach((r) => {
+      if (!r.isValid) {
+        skippedList.push({ ...r, reason: r.errors?.join(", ") || "Invalid data" });
+      } else {
+        const dup = checkDuplicateVideo(r.videoUrl);
+        if (dup) {
+          skippedList.push({
+            ...r,
+            isDuplicate: true,
+            duplicateTitle: dup.title,
+            reason: `Already published on website: "${dup.title}"`
+          });
+        } else {
+          rowsToImport.push(r);
+        }
+      }
+    });
+
+    if (rowsToImport.length === 0) {
+      setLastSkippedRows(skippedList);
+      setIsImportingExcel(false);
+      showError(`All ${excelParsedRows.length} rows were skipped: already published or invalid.`);
+      return;
+    }
+
     let importedCount = 0;
-    for (let i = 0; i < validRows.length; i++) {
-      const row = validRows[i];
+    for (let i = 0; i < rowsToImport.length; i++) {
+      const row = rowsToImport[i];
+      setExcelImportStep(`Importing ${i + 1} of ${rowsToImport.length}: ${row.title}...`);
       try {
+        let finalTitle = row.title;
+        let finalDescription = row.description;
+        let finalThumbnail = row.thumbnail;
+        let finalCategory = row.category;
+        let finalTags = row.tags;
+        let finalDuration = row.duration;
+
+        // Auto-fetch if details missing from Excel
+        if (!finalTitle || finalTitle === "Auto-detect from link" || !finalThumbnail || !finalDuration || !finalCategory || finalCategory === "General") {
+          try {
+            const meta = await api.fetchMetadata(row.videoUrl);
+            if (meta && meta.success) {
+              if (!finalTitle || finalTitle === "Auto-detect from link") finalTitle = meta.title || cleanDisplayTitle(row.videoUrl);
+              if (!finalDescription) finalDescription = meta.description || `Watch ${finalTitle} on VIRALKAAM`;
+              if (!finalThumbnail) finalThumbnail = meta.thumbnail || FALLBACK_THUMBNAIL;
+              if (!finalCategory || finalCategory === "General") finalCategory = meta.category || "General";
+              if (!finalTags || finalTags.length <= 1) finalTags = meta.tags || [finalCategory, "Trending"];
+              if (!finalDuration) finalDuration = meta.duration || "";
+            }
+          } catch {}
+        }
+
+        if (!finalTitle || finalTitle === "Auto-detect from link") finalTitle = cleanDisplayTitle(row.videoUrl) || "Stream Video";
+        if (!finalDescription) finalDescription = `Watch ${finalTitle} online on VIRALKAAM.`;
+        if (!finalThumbnail) finalThumbnail = FALLBACK_THUMBNAIL;
+        if (!finalCategory) finalCategory = "General";
+        if (!finalTags || finalTags.length === 0) finalTags = ["Trending", "Viral"];
+
         const newVideo = {
-          title: row.title,
-          description: row.description || `Watch ${row.title} on platform.`,
-          category: row.category,
-          tags: row.tags,
-          duration: row.duration || "",
+          title: finalTitle,
+          description: finalDescription,
+          category: finalCategory,
+          tags: finalTags,
+          duration: finalDuration || "",
           videoUrl: row.videoUrl,
-          thumbnail: row.thumbnail || FALLBACK_THUMBNAIL,
-          privacy: row.privacy,
-          status: row.privacy === "private" ? "private" : "published",
-          initial_views: row.initialViews,
-          initial_likes: row.initialLikes,
-          views: row.initialViews,
-          likes: row.initialLikes,
+          thumbnail: finalThumbnail,
+          privacy: row.privacy || "public",
+          status: (row.privacy || "").toLowerCase() === "private" ? "private" : "published",
+          initial_views: Number(row.initialViews) || 0,
+          initial_likes: Number(row.initialLikes) || 0,
+          views: Number(row.initialViews) || 0,
+          likes: Number(row.initialLikes) || 0,
           author: "Admin",
           uploadedAt: "Just now",
           saveToServer: saveToServer
@@ -1444,16 +1630,16 @@ export default function AdminPanel({
         if (onAddVideo) onAddVideo(saved || newVideo);
 
         importedCount++;
-        setExcelProgress(Math.round((importedCount / validRows.length) * 100));
+        setExcelProgress(Math.round((importedCount / rowsToImport.length) * 100));
 
         uploadHistory.addItem({
           id: `excel-${Date.now()}-${row.rowNum}`,
-          title: row.title,
+          title: finalTitle,
           type: "Excel Import",
           fileName: excelFile?.name || "Excel Batch",
           fileSize: `Row ${row.rowNum}`,
-          duration: row.duration || "",
-          thumbnail: row.thumbnail || FALLBACK_THUMBNAIL,
+          duration: finalDuration,
+          thumbnail: finalThumbnail,
           status: "published",
           progress: 100,
           currentStep: "Published Live",
@@ -1462,24 +1648,21 @@ export default function AdminPanel({
         });
       } catch (err) {
         console.warn(`Failed row ${row.rowNum}:`, err);
-        uploadHistory.addItem({
-          id: `excel-${Date.now()}-${row.rowNum}`,
-          title: row.title || `Row ${row.rowNum}`,
-          type: "Excel Import",
-          fileName: excelFile?.name || "Excel Batch",
-          status: "failed",
-          error: err.message || "Failed to import row",
-          currentStep: "Failed"
-        });
+        skippedList.push({ ...row, reason: err.message || "Failed to import row" });
       }
     }
 
+    setLastSkippedRows(skippedList);
     refreshHistory();
     setIsImportingExcel(false);
-    showSuccess(`Successfully imported ${importedCount} of ${validRows.length} videos from Excel!`);
-    setExcelFile(null);
-    setExcelParsedRows([]);
-    setExcelValidationErrors([]);
+    setExcelImportStep("");
+
+    if (skippedList.length > 0) {
+      showSuccess(`✓ Imported ${importedCount} videos! ${skippedList.length} rows were skipped (already in database).`);
+    } else {
+      showSuccess(`✓ All ${importedCount} videos imported and published successfully!`);
+    }
+
     loadStatsAndCategories();
     loadVideos();
   };
@@ -2277,15 +2460,75 @@ export default function AdminPanel({
           {activeNav === "upload" && (
             <div>
               {/* ── Publish header bar ── */}
-              <div className="vap-publish-header">
+              <div className="vap-publish-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
                 <h2 className="vap-page-title" style={{ margin: 0 }}>Upload Video</h2>
-                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  {/* Server Storage Pill (Persisted in localStorage) */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSaveToServer()}
+                    title={saveToServer ? "Server Storage is ON: Videos & thumbnails will be saved in server storage (Cloudflare R2)" : "Server Storage is OFF: Direct stream link will be used"}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
+                      padding: "8px 14px",
+                      borderRadius: "8px",
+                      border: saveToServer ? "1px solid #16a34a" : "1px solid #94a3b8",
+                      background: saveToServer ? "#dcfce7" : "#f1f5f9",
+                      color: saveToServer ? "#15803d" : "#475569",
+                      fontWeight: 600,
+                      fontSize: "0.85rem",
+                      cursor: "pointer",
+                      transition: "all 0.15s ease"
+                    }}
+                  >
+                    <Server size={15} color={saveToServer ? "#16a34a" : "#64748b"} />
+                    <span>Storage: <strong style={{ color: saveToServer ? "#15803d" : "#0f172a" }}>{saveToServer ? "ON" : "OFF"}</strong></span>
+                    <span
+                      style={{
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "50%",
+                        background: saveToServer ? "#16a34a" : "#94a3b8",
+                        display: "inline-block"
+                      }}
+                    />
+                  </button>
+
+                  {/* Import from Excel Button */}
+                  <button
+                    type="button"
+                    className="vap-btn-secondary"
+                    onClick={() => setShowImportExcelModal(true)}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
+                      padding: "8px 16px",
+                      fontSize: "0.88rem",
+                      fontWeight: 600,
+                      background: "#f0fdf4",
+                      color: "#166534",
+                      border: "1px solid #86efac",
+                      borderRadius: "8px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    <FileSpreadsheet size={16} color="#16a34a" />
+                    <span>Import from Excel</span>
+                  </button>
+
+                  {/* Publish Video Button */}
                   <button
                     type="button"
                     className="vap-btn-primary"
                     style={{
-                      padding: "10px 24px",
-                      fontSize: "0.95rem",
+                      padding: "9px 22px",
+                      fontSize: "0.92rem",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "7px",
                       opacity: isUploadingSingle ? 0.75 : 1,
                       cursor: isUploadingSingle ? "not-allowed" : "pointer"
                     }}
@@ -2336,7 +2579,7 @@ export default function AdminPanel({
                           value={singleVideoUrl}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setSingleVideoUrl(val);
+                            handleSingleVideoUrlChange(val);
                             setLinkUrl(val);
                           }}
                           onPaste={(e) => {
@@ -2361,6 +2604,30 @@ export default function AdminPanel({
                           )}
                         </button>
                       </div>
+
+                      {/* Instant Duplicate Check Warning (<1ms) */}
+                      {singleVideoUrl && checkDuplicateVideo(singleVideoUrl) && (
+                        <div style={{
+                          marginTop: "8px",
+                          padding: "8px 12px",
+                          background: "#fef2f2",
+                          border: "1px solid #fecaca",
+                          borderRadius: "6px",
+                          fontSize: "0.80rem",
+                          color: "#991b1b",
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: "8px"
+                        }}>
+                          <AlertCircle size={15} color="#dc2626" style={{ marginTop: "2px", flexShrink: 0 }} />
+                          <div>
+                            <strong>Already Published:</strong> This video already exists in your database:
+                            <div style={{ fontWeight: 600, marginTop: "2px", color: "#b91c1c" }}>
+                              "{checkDuplicateVideo(singleVideoUrl).title}"
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* 2. Local File Select (Ise me preview aa jayega) */}
@@ -2375,6 +2642,8 @@ export default function AdminPanel({
                             type="button"
                             onClick={() => {
                               setSingleFile(null);
+                              setVideoDurationSecs(0);
+                              setCurrentScrubTime(0);
                               if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
                             }}
                             style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
@@ -2393,20 +2662,117 @@ export default function AdminPanel({
                       />
 
                       {singleFile ? (
-                        /* Embedded Local Video Player Preview */
-                        <div style={{ background: "#0f172a", borderRadius: "10px", padding: "10px", border: "1.5px solid #334155" }}>
+                        /* Embedded Local Video Player Preview + Timeline Frame Scrubber */
+                        <div style={{ background: "#0f172a", borderRadius: "10px", padding: "12px", border: "1.5px solid #334155" }}>
                           <video
+                            ref={videoPlayerRef}
                             src={URL.createObjectURL(singleFile)}
                             controls
+                            crossOrigin="anonymous"
                             style={{ width: "100%", maxHeight: "200px", borderRadius: "6px", background: "#000", display: "block" }}
+                            onLoadedMetadata={(e) => {
+                              const d = e.target.duration || 0;
+                              setVideoDurationSecs(d);
+                              if (!singleDuration) {
+                                setSingleDuration(formatSecsToTime(d));
+                              }
+                            }}
+                            onTimeUpdate={(e) => {
+                              setCurrentScrubTime(e.target.currentTime);
+                            }}
                           />
                           <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem" }}>
-                            <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "65%" }}>
+                            <span style={{ color: "#22c55e", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>
                               ✓ {singleFile.name}
                             </span>
                             <span style={{ color: "#94a3b8" }}>
-                              {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {singleDuration ? `| ${singleDuration}` : ""}
+                              {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {videoDurationSecs ? `| ${formatSecsToTime(videoDurationSecs)}` : ""}
                             </span>
+                          </div>
+
+                          {/* Timeline Frame Capture Control (Select Thumbnail from Video Duration) */}
+                          <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #1e293b" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                              <span style={{ color: "#cbd5e1", fontSize: "0.78rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "5px" }}>
+                                <Film size={13} color="#38bdf8" /> Video Timeline Scrubber:
+                              </span>
+                              <span style={{ color: "#38bdf8", fontSize: "0.78rem", fontFamily: "monospace", fontWeight: 700 }}>
+                                {formatSecsToTime(currentScrubTime)} / {formatSecsToTime(videoDurationSecs)}
+                              </span>
+                            </div>
+
+                            {/* Scrub range slider */}
+                            <input
+                              type="range"
+                              min={0}
+                              max={videoDurationSecs || 100}
+                              step={0.1}
+                              value={currentScrubTime}
+                              onChange={(e) => {
+                                const t = parseFloat(e.target.value) || 0;
+                                setCurrentScrubTime(t);
+                                if (videoPlayerRef.current) {
+                                  videoPlayerRef.current.currentTime = t;
+                                }
+                              }}
+                              style={{ width: "100%", accentColor: "#2563eb", cursor: "pointer", height: "6px" }}
+                            />
+
+                            {/* Quick Jump Buttons & Capture Button */}
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px", gap: "6px", flexWrap: "wrap" }}>
+                              <div style={{ display: "flex", gap: "4px" }}>
+                                {[
+                                  { label: "0s", time: 0 },
+                                  { label: "5s", time: 5 },
+                                  { label: "15s", time: 15 },
+                                  { label: "30s", time: 30 },
+                                  { label: "Mid", time: videoDurationSecs ? videoDurationSecs / 2 : 10 },
+                                ].map((btn, idx) => (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => {
+                                      const t = Math.min(btn.time, videoDurationSecs || btn.time);
+                                      setCurrentScrubTime(t);
+                                      if (videoPlayerRef.current) videoPlayerRef.current.currentTime = t;
+                                    }}
+                                    style={{
+                                      background: "#1e293b",
+                                      border: "1px solid #475569",
+                                      color: "#e2e8f0",
+                                      fontSize: "0.72rem",
+                                      padding: "3px 7px",
+                                      borderRadius: "4px",
+                                      cursor: "pointer"
+                                    }}
+                                  >
+                                    {btn.label}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={handleCaptureCurrentVideoFrame}
+                                style={{
+                                  background: "#2563eb",
+                                  color: "#ffffff",
+                                  border: "none",
+                                  borderRadius: "5px",
+                                  padding: "5px 10px",
+                                  fontSize: "0.78rem",
+                                  fontWeight: 600,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  cursor: "pointer"
+                                }}
+                                title="Capture frame at current video time as thumbnail"
+                              >
+                                <Camera size={13} />
+                                <span>Capture Frame as Thumbnail</span>
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ) : (
@@ -2540,40 +2906,6 @@ export default function AdminPanel({
                             <div style={{ fontSize: "0.74rem", color: "#64748b", marginTop: "2px" }}>PNG, JPG, WEBP (16:9 Recommended)</div>
                           </div>
                         )}
-                      </div>
-                    </div>
-
-                    {/* Save in Server Checkbox */}
-                    <div
-                      style={{
-                        padding: "10px 14px",
-                        background: saveToServer ? "#eff6ff" : "#f8fafc",
-                        border: `1.5px solid ${saveToServer ? "#93c5fd" : "#e2e8f0"}`,
-                        borderRadius: "8px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        cursor: "pointer",
-                        userSelect: "none"
-                      }}
-                      onClick={() => setSaveToServer(!saveToServer)}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                        <input
-                          type="checkbox"
-                          checked={saveToServer}
-                          onChange={(e) => setSaveToServer(e.target.checked)}
-                          style={{ width: "16px", height: "16px", cursor: "pointer" }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        <div>
-                          <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b" }}>
-                            Save in Server Storage {saveToServer ? "(ON)" : "(OFF)"}
-                          </div>
-                          <div style={{ fontSize: "0.74rem", color: "#64748b" }}>
-                            {saveToServer ? "Videos & thumbnails will be saved into server storage" : "External direct stream without consuming server space"}
-                          </div>
-                        </div>
                       </div>
                     </div>
 
@@ -2849,50 +3181,6 @@ export default function AdminPanel({
                 </div>
               </div>
 
-              {/* Excel parsed rows — full width below the 2-col card */}
-                {singleSourceType === "excel" && excelParsedRows.length > 0 && (
-                  <div className="vap-card" style={{ marginTop: "16px" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexWrap: "wrap", gap: "10px" }}>
-                      <div>
-                        <strong>{excelParsedRows.length} Rows Parsed: </strong>
-                        <span style={{ color: "#16a34a", fontWeight: 600, marginLeft: "6px" }}>{excelParsedRows.filter((r) => r.isValid).length} Valid</span>
-                        {excelValidationErrors.length > 0 && (
-                          <span style={{ color: "#dc2626", fontWeight: 600, marginLeft: "12px" }}>{excelValidationErrors.length} Errors</span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="vap-btn-primary"
-                        disabled={isImportingExcel || excelParsedRows.filter((r) => r.isValid).length === 0}
-                        onClick={handleImportExcelVideos}
-                      >
-                        {isImportingExcel ? `Importing... (${excelProgress}%)` : `Import ${excelParsedRows.filter((r) => r.isValid).length} Valid Videos`}
-                      </button>
-                    </div>
-                    <div className="vap-table-container">
-                      <table className="vap-excel-validation-table">
-                        <thead>
-                          <tr>
-                            <th>Row</th><th>Status</th><th>Title</th><th>Category</th><th>Privacy</th><th>Duration</th><th>Validation</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {excelParsedRows.map((r) => (
-                            <tr key={r.rowNum} style={{ background: r.isValid ? "#ffffff" : "#fef2f2" }}>
-                              <td>#{r.rowNum}</td>
-                              <td>{r.isValid ? <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ Valid</span> : <span style={{ color: "#dc2626", fontWeight: 600 }}>⚠ Error</span>}</td>
-                              <td><strong>{r.title || "(Missing Title)"}</strong></td>
-                              <td>{r.category}</td>
-                              <td>{r.privacy}</td>
-                              <td>{r.duration}</td>
-                              <td>{r.isValid ? <span style={{ color: "#16a34a" }}>Ready</span> : <span style={{ color: "#dc2626" }}>{r.errors.join(", ")}</span>}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
             </div>
           )}
 
@@ -2909,7 +3197,20 @@ export default function AdminPanel({
                   </p>
                 </div>
 
-                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  {lastSkippedRows.length > 0 && (
+                    <button
+                      type="button"
+                      className="vap-btn-secondary"
+                      style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fde68a", display: "inline-flex", alignItems: "center", gap: "6px" }}
+                      onClick={() => handleExportSkippedExcel(lastSkippedRows)}
+                      title="Download Skipped & Unpublished Videos from recent Excel import"
+                    >
+                      <Download size={15} />
+                      <span>Skipped Videos ({lastSkippedRows.length})</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     className="vap-btn-primary"
@@ -4193,6 +4494,284 @@ export default function AdminPanel({
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          EXCEL DATA IMPORT MODAL
+          ======================================================== */}
+      {showImportExcelModal && (
+        <div className="vap-modal-backdrop" onClick={() => !isImportingExcel && setShowImportExcelModal(false)}>
+          <div className="vap-modal-content vap-export-modal" style={{ maxWidth: "720px", width: "95%" }} onClick={(e) => e.stopPropagation()}>
+            <div className="vap-modal-header">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", color: "#16a34a" }}>
+                  <FileSpreadsheet size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0 }}>Import Videos from Excel</h3>
+                  <span className="vap-export-header-badge">.xlsx / .xls / .csv</span>
+                </div>
+              </div>
+              <button
+                className="vap-icon-btn"
+                onClick={() => !isImportingExcel && setShowImportExcelModal(false)}
+                disabled={isImportingExcel}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="vap-modal-body" style={{ maxHeight: "72vh", overflowY: "auto", padding: "18px 22px" }}>
+              {/* Guidance Info Box */}
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px 14px", marginBottom: "16px", fontSize: "0.83rem", color: "#475569" }}>
+                <div style={{ fontWeight: 600, color: "#1e293b", marginBottom: "4px" }}>
+                  📋 Excel Bulk Import Guidelines:
+                </div>
+                <ul style={{ margin: "4px 0 0", paddingLeft: "18px", lineHeight: "1.5" }}>
+                  <li>Only <strong>Video URL</strong> is required. If Title, Description, Category, Tags, Duration, or Thumbnail are empty, they will <strong>auto-fetch directly from the link</strong>.</li>
+                  <li>Views & Likes default to <strong>0</strong>. Publish date will be set to current time.</li>
+                  <li>Videos already present in your database are <strong>auto-verified in &lt;1ms and skipped</strong>.</li>
+                </ul>
+              </div>
+
+              {/* Storage Mode Toggle Row */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: saveToServer ? "#f0fdf4" : "#f1f5f9", border: `1.5px solid ${saveToServer ? "#86efac" : "#cbd5e1"}`, borderRadius: "8px", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
+                <div>
+                  <div style={{ fontSize: "0.86rem", fontWeight: 700, color: saveToServer ? "#166534" : "#334155", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Server size={15} color={saveToServer ? "#16a34a" : "#64748b"} />
+                    <span>Server Storage: <strong>{saveToServer ? "ON" : "OFF"}</strong></span>
+                  </div>
+                  <div style={{ fontSize: "0.76rem", color: saveToServer ? "#15803d" : "#64748b", marginTop: "2px" }}>
+                    {saveToServer ? "Videos will be saved directly into Cloudflare R2 / Server storage." : "Videos will stream directly via source link without using server storage."}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSaveToServer()}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "6px",
+                    border: saveToServer ? "1px solid #16a34a" : "1px solid #94a3b8",
+                    background: saveToServer ? "#dcfce7" : "#ffffff",
+                    color: saveToServer ? "#15803d" : "#334155",
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    cursor: "pointer"
+                  }}
+                >
+                  Turn {saveToServer ? "OFF" : "ON"}
+                </button>
+              </div>
+
+              {/* Sample Template Download */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "8px" }}>
+                <span style={{ fontSize: "0.84rem", fontWeight: 600, color: "#334155" }}>Select Excel or CSV Spreadsheet:</span>
+                <button
+                  type="button"
+                  className="vap-btn-secondary"
+                  onClick={handleDownloadExcelTemplate}
+                  style={{ fontSize: "0.8rem", padding: "6px 12px", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                >
+                  <Download size={13} />
+                  <span>Download Sample Template (.xlsx)</span>
+                </button>
+              </div>
+
+              {/* Excel Dropzone */}
+              <input
+                type="file"
+                ref={excelInputRef}
+                accept=".xlsx,.xls,.csv"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleExcelFileSelect(file);
+                }}
+              />
+
+              <div
+                className="vap-dropzone"
+                onClick={() => excelInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files?.[0]) handleExcelFileSelect(e.dataTransfer.files[0]);
+                }}
+                style={{
+                  padding: "22px 14px",
+                  cursor: "pointer",
+                  marginBottom: "16px",
+                  border: excelFile ? "2px solid #22c55e" : "2px dashed #94a3b8",
+                  background: excelFile ? "#f0fdf4" : undefined
+                }}
+              >
+                <div className="vap-dropzone-icon" style={{ marginBottom: "6px", color: excelFile ? "#16a34a" : "#2563eb" }}>
+                  <FileSpreadsheet size={28} />
+                </div>
+                <div className="vap-dropzone-prompt" style={{ fontSize: "0.9rem", fontWeight: 600 }}>
+                  {excelFile ? `✓ Selected: ${excelFile.name}` : "Click or Drag & Drop Excel File Here"}
+                </div>
+                <span className="vap-dropzone-sub" style={{ fontSize: "0.76rem", marginTop: "4px" }}>
+                  {excelFile ? `${(excelFile.size / 1024).toFixed(1)} KB — Click to change file` : "Supports .xlsx, .xls, and .csv formats"}
+                </span>
+              </div>
+
+              {/* Stats Summary */}
+              {excelParsedRows.length > 0 && (
+                <div style={{ marginBottom: "16px" }}>
+                  {(() => {
+                    const readyCount = excelParsedRows.filter((r) => r.isValid && !r.isDuplicate).length;
+                    const dupCount = excelParsedRows.filter((r) => r.isDuplicate).length;
+                    const errCount = excelParsedRows.filter((r) => !r.isValid).length;
+
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
+                          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "10px", borderRadius: "8px", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.2rem", fontWeight: 700, color: "#166534" }}>{readyCount}</div>
+                            <div style={{ fontSize: "0.76rem", color: "#15803d", fontWeight: 600 }}>Ready to Publish</div>
+                          </div>
+                          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", padding: "10px", borderRadius: "8px", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.2rem", fontWeight: 700, color: "#b45309" }}>{dupCount}</div>
+                            <div style={{ fontSize: "0.76rem", color: "#92400e", fontWeight: 600 }}>Already Published (Skip)</div>
+                          </div>
+                          <div style={{ background: errCount > 0 ? "#fef2f2" : "#f8fafc", border: `1px solid ${errCount > 0 ? "#fecaca" : "#e2e8f0"}`, padding: "10px", borderRadius: "8px", textAlign: "center" }}>
+                            <div style={{ fontSize: "1.2rem", fontWeight: 700, color: errCount > 0 ? "#dc2626" : "#64748b" }}>{errCount}</div>
+                            <div style={{ fontSize: "0.76rem", color: "#64748b", fontWeight: 600 }}>Invalid Rows</div>
+                          </div>
+                        </div>
+
+                        {dupCount > 0 && (
+                          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "6px", padding: "8px 12px", fontSize: "0.8rem", color: "#92400e", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <AlertCircle size={15} color="#d97706" style={{ flexShrink: 0 }} />
+                            <span>{dupCount} videos are already published in your database and will be automatically skipped to prevent duplicates.</span>
+                          </div>
+                        )}
+
+                        {/* Preview Table of parsed rows */}
+                        <div style={{ maxHeight: "160px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "6px" }}>
+                          <table className="vap-excel-validation-table" style={{ margin: 0, fontSize: "0.78rem" }}>
+                            <thead>
+                              <tr>
+                                <th style={{ padding: "6px 8px" }}>Row</th>
+                                <th style={{ padding: "6px 8px" }}>Status</th>
+                                <th style={{ padding: "6px 8px" }}>Title / Video URL</th>
+                                <th style={{ padding: "6px 8px" }}>Category</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {excelParsedRows.slice(0, 15).map((r) => (
+                                <tr key={r.rowNum} style={{ background: r.isDuplicate ? "#fffbeb" : (r.isValid ? "#ffffff" : "#fef2f2") }}>
+                                  <td style={{ padding: "5px 8px" }}>#{r.rowNum}</td>
+                                  <td style={{ padding: "5px 8px" }}>
+                                    {r.isDuplicate ? (
+                                      <span style={{ color: "#b45309", fontWeight: 600 }}>Already Published</span>
+                                    ) : r.isValid ? (
+                                      <span style={{ color: "#16a34a", fontWeight: 600 }}>Ready</span>
+                                    ) : (
+                                      <span style={{ color: "#dc2626", fontWeight: 600 }}>Invalid</span>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: "5px 8px", maxWidth: "250px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <strong>{r.title || cleanDisplayTitle(r.videoUrl)}</strong>
+                                    <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{r.videoUrl}</div>
+                                  </td>
+                                  <td style={{ padding: "5px 8px" }}>{r.category || "General"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Progress Bar during import */}
+              {isImportingExcel && (
+                <div style={{ marginBottom: "16px", background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.82rem", fontWeight: 600, marginBottom: "6px" }}>
+                    <span style={{ color: "#166534", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <Loader2 size={14} className="animate-spin" />
+                      {excelImportStep || "Importing videos..."}
+                    </span>
+                    <span style={{ color: "#166534", fontWeight: 700 }}>{excelProgress}%</span>
+                  </div>
+                  <div style={{ width: "100%", height: "8px", background: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{ width: `${excelProgress}%`, height: "100%", background: "#16a34a", transition: "width 0.2s" }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Skipped Rows Download Alert */}
+              {lastSkippedRows.length > 0 && (
+                <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: "8px", padding: "12px 14px", marginBottom: "14px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                  <div>
+                    <div style={{ fontSize: "0.85rem", fontWeight: 700, color: "#92400e" }}>
+                      {lastSkippedRows.length} Videos Skipped / Unpublished
+                    </div>
+                    <div style={{ fontSize: "0.76rem", color: "#78350f" }}>
+                      These video links are already present on your website or were duplicates.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleExportSkippedExcel(lastSkippedRows)}
+                    style={{
+                      padding: "6px 12px",
+                      background: "#b45309",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "6px",
+                      fontSize: "0.8rem",
+                      fontWeight: 600,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    <Download size={13} />
+                    <span>Download Skipped Excel (.xlsx)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="vap-modal-footer" style={{ display: "flex", justifyContent: "flex-end", gap: "10px", padding: "12px 20px", borderTop: "1px solid #e2e8f0" }}>
+              <button
+                type="button"
+                className="vap-btn-secondary"
+                onClick={() => setShowImportExcelModal(false)}
+                disabled={isImportingExcel}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="vap-btn-primary"
+                onClick={handleImportExcelVideos}
+                disabled={isImportingExcel || excelParsedRows.filter((r) => r.isValid && !r.isDuplicate).length === 0}
+                style={{
+                  background: "#16a34a",
+                  borderColor: "#16a34a",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "7px",
+                  padding: "9px 20px"
+                }}
+              >
+                {isImportingExcel ? (
+                  <><Loader2 className="animate-spin" size={15} /> Importing...</>
+                ) : (
+                  <><UploadCloud size={15} /> Import & Publish ({excelParsedRows.filter((r) => r.isValid && !r.isDuplicate).length}) Videos</>
+                )}
+              </button>
             </div>
           </div>
         </div>
