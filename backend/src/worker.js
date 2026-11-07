@@ -923,6 +923,8 @@ export default {
             likes = ?,
             initial_views = ?,
             initial_likes = ?,
+            uploadedAt = COALESCE(?, uploadedAt),
+            created_at = COALESCE(?, created_at),
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).bind(
@@ -939,6 +941,8 @@ export default {
           likesToSet,
           viewsToSet,
           likesToSet,
+          body.uploadedAt !== undefined ? body.uploadedAt : null,
+          body.created_at !== undefined ? body.created_at : null,
           id
         ).run();
 
@@ -1134,6 +1138,10 @@ export default {
           initial_views: initialViews,
           initial_likes: initialLikes
         };
+
+        if (body.created_at) {
+          allCandidateFields.created_at = body.created_at;
+        }
 
         // Filter to only columns that actually exist in the table
         // Auto-register new tags into tags table

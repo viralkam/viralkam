@@ -892,6 +892,8 @@ const server = http.createServer(async (req, res) => {
           likes = ?,
           initial_views = ?,
           initial_likes = ?,
+          uploadedAt = COALESCE(?, uploadedAt),
+          created_at = COALESCE(?, created_at),
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `);
@@ -923,6 +925,8 @@ const server = http.createServer(async (req, res) => {
         likesToSet,
         viewsToSet,
         likesToSet,
+        data.uploadedAt !== undefined ? data.uploadedAt : null,
+        data.created_at !== undefined ? data.created_at : null,
         id
       );
 
@@ -1000,13 +1004,13 @@ const server = http.createServer(async (req, res) => {
           category, tags, uploadedAt, author, thumbnail, videoUrl,
           hlsUrl, embedUrl, seoTitle, seoDescription, canonicalUrl,
           aeoSummary, aeoKeyFacts, geoEntities, schemaJsonLd,
-          status, privacy, initial_views, initial_likes
+          status, privacy, initial_views, initial_likes, created_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?,
           ?, ?, ?, ?,
-          ?, ?, ?, ?
+          ?, ?, ?, ?, ?
         )
       `);
 
@@ -1056,7 +1060,8 @@ const server = http.createServer(async (req, res) => {
         status,
         privacy,
         initialViews,
-        initialLikes
+        initialLikes,
+        data.created_at || new Date().toISOString().replace('T', ' ').substring(0, 19)
       );
 
       const created = db.prepare('SELECT * FROM videos WHERE id = ?').get(id);

@@ -29,7 +29,9 @@ import {
   Server,
   Zap,
   RefreshCw,
-  Camera
+  Camera,
+  Calendar,
+  Clock
 } from "lucide-react";
 import { api } from "../services/api";
 import { uploadHistory } from "../services/uploadHistory";
@@ -165,6 +167,16 @@ export default function AdminPanel({
   const [singleDuration, setSingleDuration] = useState("00:00");
   const [singleInitialViews, setSingleInitialViews] = useState("0");
   const [singleInitialLikes, setSingleInitialLikes] = useState("0");
+  const [singleUploadDate, setSingleUploadDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+  const [singleUploadTime, setSingleUploadTime] = useState(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  });
+  const [editUploadDate, setEditUploadDate] = useState("");
+  const [editUploadTime, setEditUploadTime] = useState("");
   const [singlePrivacy, setSinglePrivacy] = useState("public");
   const [isUploadingSingle, setIsUploadingSingle] = useState(false);
   const [singleUploadProgress, setSingleUploadProgress] = useState(0);
@@ -813,6 +825,20 @@ export default function AdminPanel({
       const initialViewsNum = parseInt(singleInitialViews, 10) || 0;
       const initialLikesNum = parseInt(singleInitialLikes, 10) || 0;
 
+      // Compute formatted created_at & uploadedAt from date/time inputs
+      let formattedCreatedAt = "";
+      let formattedUploadedAt = "Just now";
+      try {
+        const dStr = singleUploadDate || new Date().toISOString().substring(0, 10);
+        const tStr = singleUploadTime ? (singleUploadTime.length === 5 ? `${singleUploadTime}:00` : singleUploadTime) : new Date().toTimeString().substring(0, 8);
+        const [yr, mo, da] = dStr.split("-");
+        const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
+        if (!isNaN(dt.getTime())) {
+          formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
+          formattedUploadedAt = `${da}/${mo}/${yr}`;
+        }
+      } catch {}
+
       const newVideo = {
         title: singleTitle.trim(),
         description: singleDescription.trim() || `Watch ${singleTitle.trim()} on platform`,
@@ -828,7 +854,8 @@ export default function AdminPanel({
         views: initialViewsNum,
         likes: initialLikesNum,
         author: "Admin",
-        uploadedAt: "Just now",
+        uploadedAt: formattedUploadedAt,
+        created_at: formattedCreatedAt || undefined,
         saveToServer: saveToServer
       };
 
@@ -1135,6 +1162,19 @@ export default function AdminPanel({
       const initialViewsNum = parseInt(linkInitialViews, 10) || 0;
       const initialLikesNum = parseInt(linkInitialLikes, 10) || 0;
 
+      let formattedCreatedAt = "";
+      let formattedUploadedAt = "Just now";
+      try {
+        const dStr = singleUploadDate || new Date().toISOString().substring(0, 10);
+        const tStr = singleUploadTime ? (singleUploadTime.length === 5 ? `${singleUploadTime}:00` : singleUploadTime) : new Date().toTimeString().substring(0, 8);
+        const [yr, mo, da] = dStr.split("-");
+        const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
+        if (!isNaN(dt.getTime())) {
+          formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
+          formattedUploadedAt = `${da}/${mo}/${yr}`;
+        }
+      } catch {}
+
       const newVideo = {
         title: finalCleanTitle,
         description: linkDescription.trim() || `Watch ${finalCleanTitle} online.`,
@@ -1150,7 +1190,8 @@ export default function AdminPanel({
         views: initialViewsNum,
         likes: initialLikesNum,
         author: "Admin",
-        uploadedAt: "Just now",
+        uploadedAt: formattedUploadedAt,
+        created_at: formattedCreatedAt || undefined,
         saveToServer: saveToServer
       };
 
@@ -1197,7 +1238,97 @@ export default function AdminPanel({
   // ==========================================
   // EXCEL IMPORT HANDLERS
   // ==========================================
+  // Flexible Date & Time Parser for Excel Import & Custom Uploader
+  const parseExcelDateTime = (rawDate, rawTime) => {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+
+    if (!rawDate && !rawTime) {
+      const day = pad(now.getDate());
+      const month = pad(now.getMonth() + 1);
+      const year = now.getFullYear();
+      const hours = pad(now.getHours());
+      const minutes = pad(now.getMinutes());
+      const seconds = pad(now.getSeconds());
+      return {
+        isoString: `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`,
+        displayDate: `${day}/${month}/${year}`,
+        displayTime: `${hours}:${minutes}:${seconds}`
+      };
+    }
+
+    let day = now.getDate();
+    let month = now.getMonth(); // 0-indexed
+    let year = now.getFullYear();
+
+    if (rawDate) {
+      const dStr = String(rawDate).trim();
+      // 1. DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+      const dmyMatch = dStr.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})$/);
+      if (dmyMatch) {
+        day = parseInt(dmyMatch[1], 10);
+        month = parseInt(dmyMatch[2], 10) - 1;
+        let yr = parseInt(dmyMatch[3], 10);
+        if (yr < 100) yr += 2000;
+        year = yr;
+      } else {
+        // 2. YYYY-MM-DD
+        const ymdMatch = dStr.match(/^(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})$/);
+        if (ymdMatch) {
+          year = parseInt(ymdMatch[1], 10);
+          month = parseInt(ymdMatch[2], 10) - 1;
+          day = parseInt(ymdMatch[3], 10);
+        } else {
+          const parsedD = new Date(dStr);
+          if (!isNaN(parsedD.getTime())) {
+            day = parsedD.getDate();
+            month = parsedD.getMonth();
+            year = parsedD.getFullYear();
+          }
+        }
+      }
+    }
+
+    let hours = now.getHours();
+    let minutes = now.getMinutes();
+    let seconds = now.getSeconds();
+
+    if (rawTime) {
+      const tStr = String(rawTime).trim();
+      const timeMatch = tStr.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s*(am|pm)?$/i);
+      if (timeMatch) {
+        let h = parseInt(timeMatch[1], 10);
+        minutes = parseInt(timeMatch[2], 10);
+        seconds = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+        const ampm = timeMatch[4] ? timeMatch[4].toLowerCase() : null;
+        if (ampm === "pm" && h < 12) h += 12;
+        if (ampm === "am" && h === 12) h = 0;
+        hours = h;
+      }
+    }
+
+    const finalDate = new Date(year, month, day, hours, minutes, seconds);
+    const valid = !isNaN(finalDate.getTime());
+    const finalYear = valid ? finalDate.getFullYear() : year;
+    const finalMonth = valid ? finalDate.getMonth() + 1 : month + 1;
+    const finalDay = valid ? finalDate.getDate() : day;
+    const finalHours = valid ? finalDate.getHours() : hours;
+    const finalMinutes = valid ? finalDate.getMinutes() : minutes;
+    const finalSeconds = valid ? finalDate.getSeconds() : seconds;
+
+    return {
+      isoString: `${finalYear}-${pad(finalMonth)}-${pad(finalDay)} ${pad(finalHours)}:${pad(finalMinutes)}:${pad(finalSeconds)}`,
+      displayDate: `${pad(finalDay)}/${pad(finalMonth)}/${finalYear}`,
+      displayTime: `${pad(finalHours)}:${pad(finalMinutes)}:${pad(finalSeconds)}`
+    };
+  };
+
   const handleDownloadExcelTemplate = () => {
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const sampleDate = `${pad(today.getDate())}/${pad(today.getMonth() + 1)}/${today.getFullYear()}`;
+    const sampleTime = `${pad(today.getHours())}:${pad(today.getMinutes())}:${pad(today.getSeconds())}`;
+
     const templateData = [
       {
         "Video URL": "https://vjs.zencdn.net/v/oceans.mp4",
@@ -1209,7 +1340,9 @@ export default function AdminPanel({
         "Duration": "04:30",
         "Initial Views": 0,
         "Initial Likes": 0,
-        "Privacy": "Public"
+        "Privacy": "Public",
+        "Upload Date": sampleDate,
+        "Upload Time": sampleTime
       },
       {
         "Video URL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -1221,11 +1354,27 @@ export default function AdminPanel({
         "Duration": "",
         "Initial Views": 0,
         "Initial Likes": 0,
-        "Privacy": "Public"
+        "Privacy": "Public",
+        "Upload Date": "",
+        "Upload Time": ""
       }
     ];
 
     const worksheet = XLSX.utils.json_to_sheet(templateData);
+    worksheet["!cols"] = [
+      { wch: 45 }, // Video URL
+      { wch: 45 }, // Thumbnail URL
+      { wch: 30 }, // Title
+      { wch: 40 }, // Description
+      { wch: 16 }, // Category
+      { wch: 25 }, // Tags
+      { wch: 12 }, // Duration
+      { wch: 14 }, // Initial Views
+      { wch: 14 }, // Initial Likes
+      { wch: 12 }, // Privacy
+      { wch: 14 }, // Upload Date
+      { wch: 14 }  // Upload Time
+    ];
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "VideoTemplate");
     XLSX.writeFile(workbook, "video_import_template.xlsx");
@@ -1409,26 +1558,26 @@ export default function AdminPanel({
           "Duration": safeExcelStr(v.duration || ""),
           "Initial Views": Number(v.views || 0),
           "Initial Likes": Number(v.likes || 0),
+          "Privacy": safeExcelStr(privacy),
           "Upload Date": safeExcelStr(uploadDate),
-          "Upload Time": safeExcelStr(uploadTime),
-          "Privacy": safeExcelStr(privacy)
+          "Upload Time": safeExcelStr(uploadTime)
         };
       });
 
       const worksheet = XLSX.utils.json_to_sheet(excelRows);
       worksheet["!cols"] = [
         { wch: 45 }, // Video URL
-        { wch: 40 }, // Thumbnail URL
-        { wch: 35 }, // Title
-        { wch: 50 }, // Description
-        { wch: 15 }, // Category
-        { wch: 30 }, // Tags
-        { wch: 10 }, // Duration
-        { wch: 12 }, // Initial Views
-        { wch: 12 }, // Initial Likes
+        { wch: 45 }, // Thumbnail URL
+        { wch: 30 }, // Title
+        { wch: 40 }, // Description
+        { wch: 16 }, // Category
+        { wch: 25 }, // Tags
+        { wch: 12 }, // Duration
+        { wch: 14 }, // Initial Views
+        { wch: 14 }, // Initial Likes
+        { wch: 12 }, // Privacy
         { wch: 14 }, // Upload Date
-        { wch: 12 }, // Upload Time
-        { wch: 10 }  // Privacy
+        { wch: 14 }  // Upload Time
       ];
 
       // Double safety guard: ensure NO cell in worksheet exceeds 32,000 characters
@@ -1482,7 +1631,7 @@ export default function AdminPanel({
         const workbook = XLSX.read(data, { type: "array" });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false, dateNF: "dd/mm/yyyy" });
 
         const parsed = [];
         const errors = [];
@@ -1511,6 +1660,9 @@ export default function AdminPanel({
           const initialLikes = findVal(["Initial Likes", "Likes", "InitialLikes"]);
           const privacyRaw = findVal(["Privacy", "Status", "Visibility"]) || "Public";
           const thumbnailRaw = findVal(["Thumbnail", "Thumbnail URL", "Thumb", "Poster", "Image"]);
+          const uploadDateRaw = findVal(["Upload Date", "UploadDate", "Date", "Published Date", "Publish Date", "Created Date", "Date Uploaded"]);
+          const uploadTimeRaw = findVal(["Upload Time", "UploadTime", "Time", "Published Time", "Publish Time", "Created Time", "Time Uploaded"]);
+          const { isoString, displayDate, displayTime } = parseExcelDateTime(uploadDateRaw, uploadTimeRaw);
 
           // Auto-heal path mismatch if user placed URL in Title column or Title is a file path
           if (title && (title.startsWith("http://") || title.startsWith("https://"))) {
@@ -1551,6 +1703,9 @@ export default function AdminPanel({
             initialViews: parseInt(initialViews, 10) || 0,
             initialLikes: parseInt(initialLikes, 10) || 0,
             privacy: privacyClean,
+            uploadDate: displayDate,
+            uploadTime: displayTime,
+            createdAt: isoString,
             isDuplicate: Boolean(duplicateMatch),
             duplicateTitle: duplicateMatch ? duplicateMatch.title : "",
             isValid: rowErrors.length === 0,
@@ -1650,6 +1805,8 @@ export default function AdminPanel({
         if (!finalCategory) finalCategory = "General";
         if (!finalTags || finalTags.length === 0) finalTags = ["Trending", "Viral"];
 
+        const formattedCreatedAt = row.createdAt ? row.createdAt.replace('T', ' ').substring(0, 19) : undefined;
+
         const newVideo = {
           title: finalTitle,
           description: finalDescription,
@@ -1665,7 +1822,8 @@ export default function AdminPanel({
           views: Number(row.initialViews) || 0,
           likes: Number(row.initialLikes) || 0,
           author: "Admin",
-          uploadedAt: "Just now",
+          uploadedAt: row.uploadDate || "Just now",
+          created_at: formattedCreatedAt,
           saveToServer: saveToServer
         };
 
@@ -1718,6 +1876,25 @@ export default function AdminPanel({
     const cleanThumb = video.thumbnail || FALLBACK_THUMBNAIL;
     const currentViews = video.views !== undefined ? Number(video.views) : (video.initial_views !== undefined ? Number(video.initial_views) : 0);
     const currentLikes = video.likes !== undefined ? Number(video.likes) : (video.initial_likes !== undefined ? Number(video.initial_likes) : 0);
+
+    let initDate = "";
+    let initTime = "";
+    const candidate = video.created_at || video.uploadedAt;
+    if (candidate) {
+      const dt = new Date(candidate);
+      if (!isNaN(dt.getTime())) {
+        initDate = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+        initTime = `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")}`;
+      } else if (typeof candidate === "string") {
+        const dmy = candidate.trim().match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+        if (dmy) {
+          initDate = `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
+          initTime = "12:00:00";
+        }
+      }
+    }
+    setEditUploadDate(initDate);
+    setEditUploadTime(initTime);
 
     setEditingVideo({
       ...video,
@@ -1843,6 +2020,18 @@ export default function AdminPanel({
       const viewsNum = Number(editingVideo.views !== undefined ? editingVideo.views : editingVideo.initial_views) || 0;
       const likesNum = Number(editingVideo.likes !== undefined ? editingVideo.likes : editingVideo.initial_likes) || 0;
 
+      let formattedCreatedAt = undefined;
+      let formattedUploadedAt = undefined;
+      if (editUploadDate) {
+        const tStr = editUploadTime ? (editUploadTime.length === 5 ? `${editUploadTime}:00` : editUploadTime) : "12:00:00";
+        const [yr, mo, da] = editUploadDate.split("-");
+        const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
+        if (!isNaN(dt.getTime())) {
+          formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
+          formattedUploadedAt = `${da}/${mo}/${yr}`;
+        }
+      }
+
       const updatedPayload = {
         ...editingVideo,
         videoUrl: finalVideoUrl,
@@ -1853,7 +2042,9 @@ export default function AdminPanel({
         likes: likesNum,
         initial_views: viewsNum,
         initial_likes: likesNum,
-        duration: editingVideo.duration || (editVideoDurationSecs ? formatSecsToTime(editVideoDurationSecs) : "00:00")
+        duration: editingVideo.duration || (editVideoDurationSecs ? formatSecsToTime(editVideoDurationSecs) : "00:00"),
+        uploadedAt: formattedUploadedAt || editingVideo.uploadedAt,
+        created_at: formattedCreatedAt || editingVideo.created_at
       };
 
       const result = await api.updateVideo(editingVideo.id, updatedPayload);
@@ -3297,6 +3488,39 @@ export default function AdminPanel({
                       </div>
                     )}
 
+                    {/* Upload Date & Time (Auto / Manual) */}
+                    {singleSourceType !== "excel" && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+                        <div className="vap-form-group" style={{ margin: 0 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Calendar size={14} color="#2563eb" />
+                            <span>Upload Date</span>
+                            <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: Today)</span>
+                          </label>
+                          <input
+                            type="date"
+                            className="vap-input"
+                            value={singleUploadDate}
+                            onChange={(e) => setSingleUploadDate(e.target.value)}
+                          />
+                        </div>
+                        <div className="vap-form-group" style={{ margin: 0 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Clock size={14} color="#2563eb" />
+                            <span>Upload Time</span>
+                            <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: Current Time)</span>
+                          </label>
+                          <input
+                            type="time"
+                            step="1"
+                            className="vap-input"
+                            value={singleUploadTime}
+                            onChange={(e) => setSingleUploadTime(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {/* Privacy toggle */}
                     {singleSourceType !== "excel" && (
                       <div className="vap-form-group">
@@ -4311,6 +4535,37 @@ export default function AdminPanel({
                         </div>
                       </div>
 
+                      {/* Upload Date & Time (Edit) */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+                        <div className="vap-form-group" style={{ margin: 0 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Calendar size={14} color="#2563eb" />
+                            <span>Upload Date</span>
+                            <span style={{ fontSize: "0.74rem", color: "#64748b" }}>(DD/MM/YYYY)</span>
+                          </label>
+                          <input
+                            type="date"
+                            className="vap-input"
+                            value={editUploadDate}
+                            onChange={(e) => setEditUploadDate(e.target.value)}
+                          />
+                        </div>
+                        <div className="vap-form-group" style={{ margin: 0 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Clock size={14} color="#2563eb" />
+                            <span>Upload Time</span>
+                            <span style={{ fontSize: "0.74rem", color: "#64748b" }}>(HH:MM:SS)</span>
+                          </label>
+                          <input
+                            type="time"
+                            step="1"
+                            className="vap-input"
+                            value={editUploadTime}
+                            onChange={(e) => setEditUploadTime(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
                       {/* Privacy Radio / Dropdown */}
                       <div className="vap-form-group">
                         <label>Privacy <span className="required">*</span></label>
@@ -4753,7 +5008,7 @@ export default function AdminPanel({
                 <div className="vap-export-format-preview" style={{ marginTop: "18px" }}>
                   <div><strong>Standard Columns in Exported Excel:</strong></div>
                   <div className="vap-export-cols-tags">
-                    {["Video URL", "Thumbnail URL", "Title", "Description", "Category", "Tags", "Duration", "Initial Views", "Initial Likes", "Upload Date", "Upload Time", "Privacy"].map((col) => (
+                    {["Video URL", "Thumbnail URL", "Title", "Description", "Category", "Tags", "Duration", "Initial Views", "Initial Likes", "Privacy", "Upload Date", "Upload Time"].map((col) => (
                       <span key={col} className="vap-export-col-tag">{col}</span>
                     ))}
                   </div>
@@ -4998,9 +5253,9 @@ export default function AdminPanel({
                   <span className="vap-export-col-tag">Duration</span>
                   <span className="vap-export-col-tag">Initial Views</span>
                   <span className="vap-export-col-tag">Initial Likes</span>
+                  <span className="vap-export-col-tag">Privacy</span>
                   <span className="vap-export-col-tag">Upload Date</span>
                   <span className="vap-export-col-tag">Upload Time</span>
-                  <span className="vap-export-col-tag">Privacy</span>
                 </div>
               </div>
 
@@ -5072,7 +5327,7 @@ export default function AdminPanel({
                 </div>
                 <ul style={{ margin: "4px 0 0", paddingLeft: "18px", lineHeight: "1.5" }}>
                   <li>Only <strong>Video URL</strong> is required. If Title, Description, Category, Tags, Duration, or Thumbnail are empty, they will <strong>auto-fetch directly from the link</strong>.</li>
-                  <li>Views & Likes default to <strong>0</strong>. Publish date will be set to current time.</li>
+                  <li>Views & Likes default to <strong>0</strong>. Upload Date & Time can be specified in Excel (DD/MM/YYYY and HH:MM:SS) or will default to current time.</li>
                   <li>Videos already present in your database are <strong>auto-verified in &lt;1ms and skipped</strong>.</li>
                 </ul>
               </div>
@@ -5200,6 +5455,7 @@ export default function AdminPanel({
                                 <th style={{ padding: "6px 8px" }}>Status</th>
                                 <th style={{ padding: "6px 8px" }}>Title / Video URL</th>
                                 <th style={{ padding: "6px 8px" }}>Category</th>
+                                <th style={{ padding: "6px 8px" }}>Upload Date & Time</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -5220,6 +5476,10 @@ export default function AdminPanel({
                                     <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{r.videoUrl}</div>
                                   </td>
                                   <td style={{ padding: "5px 8px" }}>{r.category || "General"}</td>
+                                  <td style={{ padding: "5px 8px", fontSize: "0.74rem", color: "#475569", whiteSpace: "nowrap" }}>
+                                    <div>📅 {r.uploadDate || "-"}</div>
+                                    <div style={{ color: "#64748b" }}>⏰ {r.uploadTime || "-"}</div>
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
