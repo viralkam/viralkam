@@ -223,6 +223,11 @@ body {
   overflow: hidden;
 }
 
+.tags-menu-dropdown {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
 .cat-dropdown-item {
   display: block;
   width: 100%;

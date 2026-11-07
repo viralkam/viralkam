@@ -291,6 +291,11 @@
   color: #0891b2;
 }
 
+.vap-stat-icon.orange {
+  background: #fff7ed;
+  color: #ea580c;
+}
+
 .vap-stat-meta {
   display: flex;
   flex-direction: column;
@@ -552,6 +557,54 @@
   font-size: 0.75rem;
   font-weight: 500;
   margin: 1px 3px 1px 0;
+}
+
+/* Suggested Tags Pills Under Input */
+.vap-suggested-tags {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px dashed #cbd5e1;
+}
+
+.vap-suggested-label {
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.vap-suggested-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vap-tag-chip {
+  padding: 3px 8px;
+  border-radius: 14px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.vap-tag-chip:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.vap-tag-chip.selected {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+  font-weight: 600;
 }
 
 /* Action icons */
@@ -1154,4 +1207,411 @@
   font-family: monospace;
   font-size: 0.73rem;
   color: #334155;
+}
+
+/* ==============================================================================
+   EXPORT DATA FULL SCREEN STYLES
+   ============================================================================== */
+.vap-export-stats-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border: 1px solid #a7f3d0;
+  border-radius: 12px;
+  padding: 18px 24px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.vap-export-stats-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.vap-export-stats-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #10b981;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vap-export-stats-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #065f46;
+}
+
+.vap-export-stats-desc {
+  margin: 3px 0 0;
+  font-size: 0.85rem;
+  color: #047857;
+}
+
+.vap-export-stats-pill {
+  background: #ffffff;
+  border: 1px solid #10b981;
+  color: #047857;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.vap-export-filter-card {
+  background: #ffffff;
+  border: 1px solid var(--admin-border);
+  border-radius: 14px;
+  padding: 22px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.vap-export-mode-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.vap-export-mode-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1.5px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.vap-export-mode-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.vap-export-mode-btn.active {
+  background: #10b981;
+  border-color: #10b981;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.25);
+}
+
+.vap-export-inputs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.vap-export-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vap-export-input-group label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.vap-export-input {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1.5px solid #cbd5e1;
+  background: #ffffff;
+  font-size: 0.9rem;
+  color: #0f172a;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.vap-export-input:focus {
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.vap-export-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 16px;
+  border-top: 1px solid var(--admin-border);
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.vap-export-count-summary {
+  font-size: 0.95rem;
+  color: #334155;
+}
+
+.vap-export-download-btn {
+  background: #10b981;
+  color: #ffffff;
+  padding: 12px 28px;
+  border-radius: 10px;
+  border: none;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 6px 14px rgba(16, 185, 129, 0.28);
+  transition: all 0.2s ease;
+}
+
+.vap-export-download-btn:hover:not(:disabled) {
+  background: #059669;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(16, 185, 129, 0.35);
+}
+
+.vap-export-download-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.vap-export-preview-card {
+  background: #ffffff;
+  border: 1px solid var(--admin-border);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.vap-export-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.vap-export-preview-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+/* ============================================================
+   UPLOAD VIDEO — NEW UNIFIED LAYOUT
+   ============================================================ */
+
+/* Top publish header bar */
+.vap-publish-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+/* 3 source-type toggle buttons container */
+.vap-upload-source-btns {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  background: #f1f5f9;
+  padding: 5px;
+  border-radius: 10px;
+}
+
+/* Individual source button */
+.vap-src-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+
+.vap-src-btn:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.vap-src-btn.active {
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+}
+
+/* Privacy toggle buttons */
+.vap-privacy-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: #64748b;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+
+.vap-privacy-btn:hover {
+  border-color: #94a3b8;
+  color: #334155;
+}
+
+.vap-privacy-btn.active-public {
+  border-color: #16a34a;
+  background: #f0fdf4;
+  color: #15803d;
+  font-weight: 600;
+}
+
+.vap-privacy-btn.active-private {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 600;
+}
+
+/* Outline danger button (used in dashboard clear data) */
+.vap-btn-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 2px solid #cbd5e1;
+  background: transparent;
+  color: #334155;
+  transition: all 0.18s;
+}
+
+.vap-btn-outline:hover {
+  background: #f1f5f9;
+}
+
+.vap-btn-outline.danger {
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.vap-btn-outline.danger:hover {
+  background: #fef2f2;
+  border-color: #dc2626;
+}
+
+/* ============================================================
+   SAVE IN SERVER & AUTO-FETCH METADATA STYLES
+   ============================================================ */
+
+.vap-save-server-banner {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  transition: all 0.2s ease;
+}
+
+.vap-save-server-banner.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.vap-save-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #e2e8f0;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.vap-save-icon.active {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.vap-toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.vap-toggle-pill.enabled {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+.vap-toggle-pill.disabled {
+  background: #cbd5e1;
+  color: #475569;
+}
+
+.vap-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.vap-fetch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+  transition: background 0.18s;
+  white-space: nowrap;
+}
+
+.vap-fetch-btn:hover {
+  background: #1d4ed8;
+}
+
+.vap-fetch-btn:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
 }

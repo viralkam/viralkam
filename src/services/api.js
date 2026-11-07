@@ -76,15 +76,34 @@ export const api = {
   },
 
   /**
+   * Auto-fetch metadata (Title, Description, Thumbnail, Duration, Tags, Category) from link
+   */
+  async fetchMetadata(url) {
+    try {
+      const res = await fetch(`${API_BASE}/fetch-meta?url=${encodeURIComponent(url.trim())}`);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const data = await res.json();
+      if (data && data.success) {
+        return data;
+      }
+      return null;
+    } catch (err) {
+      console.warn('[API] Failed to fetch link metadata:', err.message);
+      return null;
+    }
+  },
+
+  /**
    * Fetch paginated & filtered videos from Backend / D1
    */
-  async getVideos({ page = 1, limit = 24, search = '', category = '', status = '', privacy = '', sort = 'newest' } = {}) {
+  async getVideos({ page = 1, limit = 24, search = '', category = '', tag = '', status = '', privacy = '', sort = 'newest' } = {}) {
     try {
       const params = new URLSearchParams();
       if (page) params.append('page', page);
       if (limit) params.append('limit', limit);
       if (search) params.append('search', search);
       if (category) params.append('category', category);
+      if (tag) params.append('tag', tag);
       if (status || privacy) params.append('status', status || privacy);
       if (sort) params.append('sort', sort);
 
@@ -390,6 +409,105 @@ export const api = {
       throw new Error(data.message || 'Failed to delete category');
     }
     return true;
+  },
+
+  /**
+   * Fetch all tags with video counts
+   */
+  async getTags() {
+    try {
+      const res = await fetch(`${API_BASE}/tags`);
+      if (!res.ok) throw new Error('Failed to fetch tags');
+      const data = await res.json();
+      return data.tags || [];
+    } catch {
+      return [
+        { id: 1, name: 'Trending', slug: 'trending', count: 0 },
+        { id: 2, name: 'Desi', slug: 'desi', count: 0 },
+        { id: 3, name: 'Viral', slug: 'viral', count: 0 },
+        { id: 4, name: 'MMS', slug: 'mms', count: 0 },
+        { id: 5, name: 'Bhabhi', slug: 'bhabhi', count: 0 },
+        { id: 6, name: 'Romance', slug: 'romance', count: 0 },
+        { id: 7, name: 'College', slug: 'college', count: 0 },
+        { id: 8, name: 'HD', slug: 'hd', count: 0 }
+      ];
+    }
+  },
+
+  /**
+   * Create tag (Admin)
+   */
+  async createTag(name) {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/tags`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to create tag');
+    }
+    return data.tag;
+  },
+
+  /**
+   * Update tag (Admin)
+   */
+  async updateTag(id, name) {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/tags/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to update tag');
+    }
+    return data.tag;
+  },
+
+  /**
+   * Delete tag (Admin)
+   */
+  async deleteTag(id) {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/tags/${id}`, {
+      method: 'DELETE',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to delete tag');
+    }
+    return true;
+  },
+
+  /**
+   * Clear old dummy/seed videos (Admin)
+   */
+  async clearDummyData() {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/admin/clear-dummy`, {
+      method: 'POST',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      }
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to clear dummy data');
+    }
+    return data;
   },
 
   /**

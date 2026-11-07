@@ -27,10 +27,11 @@ export default function WatchView({
   onSelectVideo, 
   onNavigateHome, 
   onSelectCategory, 
+  onSelectTag,
   onSelectLegalPage 
 }) {
-  const [likes, setLikes] = useState(video.likes || 1200);
-  const [dislikes, setDislikes] = useState(video.dislikes || 50);
+  const [likes, setLikes] = useState(Number(video.likes || 0));
+  const [dislikes, setDislikes] = useState(Number(video.dislikes || 0));
   const [userVote, setUserVote] = useState(null); // 'like' | 'dislike' | null
   
   // Automatically generate and inject SEO, AEO, and GEO metadata into document head
@@ -232,7 +233,7 @@ export default function WatchView({
                   <button 
                     key={`tag-${idx}`} 
                     className="ref-pill-btn tag-pill" 
-                    onClick={() => onSelectCategory && onSelectCategory(tag)}
+                    onClick={() => (onSelectTag ? onSelectTag(tag) : onSelectCategory && onSelectCategory(tag))}
                     title={`View #${tag}`}
                   >
                     <Tag size={13} className="pill-icon tag-icon" />
@@ -247,7 +248,7 @@ export default function WatchView({
           <div className="details-sidebar-boxes">
             {/* Box 1: Clean Views Box */}
             <div className="ref-views-box">
-              <span className="ref-views-num">{video.views.toLocaleString()}</span>
+              <span className="ref-views-num">{(video.views || 0).toLocaleString()}</span>
               <span className="ref-views-sub">views</span>
             </div>
 

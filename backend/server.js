@@ -77,6 +77,17 @@ try { db.exec("ALTER TABLE videos ADD COLUMN privacy TEXT DEFAULT 'public'"); } 
 try { db.exec("ALTER TABLE videos ADD COLUMN initial_views INTEGER DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE videos ADD COLUMN initial_likes INTEGER DEFAULT 0"); } catch {}
 try { db.exec("INSERT OR IGNORE INTO categories (name, slug) VALUES ('General', 'general')"); } catch {}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_tags_slug ON tags(slug);
+  `);
+} catch {}
 
 // Helper to set CORS & JSON headers
 function sendJson(res, statusCode, data) {
@@ -274,6 +285,7 @@ const server = http.createServer(async (req, res) => {
       const totalVideosRow = db.prepare('SELECT COUNT(*) as total FROM videos').get();
       const totalViewsRow = db.prepare('SELECT COALESCE(SUM(views), 0) as total FROM videos').get();
       const totalCategoriesRow = db.prepare('SELECT COUNT(*) as total FROM categories').get();
+      const totalTagsRow = db.prepare('SELECT COUNT(*) as total FROM tags').get();
       
       const recentRows = db.prepare(`
         SELECT * FROM videos 
@@ -287,6 +299,7 @@ const server = http.createServer(async (req, res) => {
           totalVideos: totalVideosRow ? totalVideosRow.total : 0,
           totalViews: totalViewsRow ? totalViewsRow.total : 0,
           totalCategories: totalCategoriesRow ? totalCategoriesRow.total : 0,
+          totalTags: totalTagsRow ? totalTagsRow.total : 0,
           recentVideos: recentRows.map(formatVideo)
         }
       });
@@ -300,6 +313,226 @@ const server = http.createServer(async (req, res) => {
         database: 'Cloudflare D1 / SQLite Engine',
         timestamp: new Date().toISOString()
       });
+    }
+
+    // 1.1 Fetch Video & Link Metadata for Auto-filling
+    if (pathname === '/api/fetch-meta' && (req.method === 'GET' || req.method === 'POST')) {
+      let targetUrl = '';
+      if (req.method === 'GET') {
+        targetUrl = parsedUrl.query.url || '';
+      } else {
+        const body = await parseBody(req);
+        targetUrl = body.url || '';
+      }
+      targetUrl = targetUrl.trim();
+      if (!targetUrl) {
+        return sendJson(res, 400, { success: false, message: 'URL parameter is required' });
+      }
+
+      try {
+        // 1. If YouTube link
+        const ytMatch = targetUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+        if (ytMatch && ytMatch[1]) {
+          const ytId = ytMatch[1];
+          const thumbUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+          let ytTitle = '';
+          let ytAuthor = '';
+          try {
+            const oembedRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`);
+            if (oembedRes.ok) {
+              const oembedData = await oembedRes.json();
+              ytTitle = oembedData.title || '';
+              ytAuthor = oembedData.author_name || '';
+            }
+          } catch {}
+
+          const finalTitle = ytTitle || `YouTube Video (${ytId})`;
+          return sendJson(res, 200, {
+            success: true,
+            title: finalTitle,
+            description: `Watch ${finalTitle} online in high definition streaming.`,
+            thumbnail: thumbUrl,
+            duration: '',
+            tags: ['YouTube', 'Viral', 'Trending', 'HD'],
+            category: 'Trending',
+            views: Math.floor(Math.random() * 8000) + 2500,
+            likes: Math.floor((Math.random() * 8000 + 2500) * 0.95),
+            author: ytAuthor || 'Admin'
+          });
+        }
+
+        // 2. Direct Video File (.mp4, .webm, .mkv, etc.)
+        const cleanDisplay = (raw) => {
+          try {
+            const u = new URL(raw);
+            const parts = u.pathname.split('/').filter(Boolean);
+            const last = parts[parts.length - 1] || '';
+            const withoutExt = decodeURIComponent(last).replace(/\.[a-zA-Z0-9]+$/, '');
+            return withoutExt.replace(/[-_+.]/g, ' ').replace(/\s+/g, ' ').trim();
+          } catch {
+            return 'Online Video Stream';
+          }
+        };
+
+        const isDirectVideo = /\.(mp4|webm|mkv|mov|avi|m3u8)(\?.*)?$/i.test(targetUrl);
+        const pageRes = await fetch(targetUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          }
+        });
+
+        if (!pageRes.ok && isDirectVideo) {
+          const title = cleanDisplay(targetUrl) || 'Stream Video';
+          return sendJson(res, 200, {
+            success: true,
+            title,
+            description: `Watch ${title} in HD quality streaming.`,
+            thumbnail: '',
+            duration: '',
+            tags: ['Viral', 'Trending', 'HD'],
+            category: 'General',
+            views: Math.floor(Math.random() * 5000) + 1200,
+            likes: Math.floor((Math.random() * 5000 + 1200) * 0.94)
+          });
+        }
+
+        const contentType = pageRes.headers.get('content-type') || '';
+        if (contentType.includes('video/') || isDirectVideo) {
+          const title = cleanDisplay(targetUrl) || 'Stream Video';
+          return sendJson(res, 200, {
+            success: true,
+            title,
+            description: `Watch ${title} in HD quality streaming on VIRALKAAM.`,
+            thumbnail: '',
+            duration: '',
+            tags: ['Viral', 'Trending', 'HD'],
+            category: 'General',
+            views: Math.floor(Math.random() * 6000) + 1500,
+            likes: Math.floor((Math.random() * 6000 + 1500) * 0.95)
+          });
+        }
+
+        const html = await pageRes.text();
+        let title = '';
+        let description = '';
+        let thumbnail = '';
+        let duration = '';
+        let tags = [];
+
+        const ogTitle = html.match(/<meta[^>]+(?:property|name)=["'](?:og:title|twitter:title)["'][^>]+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
+        if (ogTitle && ogTitle[1]) {
+          title = ogTitle[1];
+        } else {
+          const docTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+          if (docTitle && docTitle[1]) title = docTitle[1];
+        }
+
+        const ogDesc = html.match(/<meta[^>]+(?:property|name)=["'](?:og:description|description|twitter:description)["'][^>]+content=["']([^"']+)["']/i) ||
+                       html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:description|description|twitter:description)["']/i);
+        if (ogDesc && ogDesc[1]) description = ogDesc[1];
+
+        const ogImg = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|og:image:url)["'][^>]+content=["']([^"']+)["']/i) ||
+                      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image|og:image:url)["']/i) ||
+                      html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+        if (ogImg && ogImg[1]) {
+          thumbnail = ogImg[1];
+          if (thumbnail.startsWith('/')) {
+            try {
+              const u = new URL(targetUrl);
+              thumbnail = `${u.origin}${thumbnail}`;
+            } catch {}
+          }
+        }
+
+        const ogDur = html.match(/<meta[^>]+(?:property|name)=["'](?:og:video:duration|video:duration)["'][^>]+content=["']([^"']+)["']/i) ||
+                      html.match(/"duration":\s*["']([^"']+)["']/i);
+        if (ogDur && ogDur[1]) {
+          const rawD = ogDur[1].trim();
+          if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(rawD)) {
+            duration = rawD;
+          } else {
+            const numSec = parseInt(rawD, 10);
+            if (!isNaN(numSec) && numSec > 0 && String(numSec) === rawD) {
+              const m = Math.floor(numSec / 60);
+              const s = numSec % 60;
+              duration = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            } else {
+              const iso = rawD.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+              if (iso) {
+                const h = parseInt(iso[1] || '0', 10);
+                const m = parseInt(iso[2] || '0', 10);
+                const s = parseInt(iso[3] || '0', 10);
+                duration = h > 0 
+                  ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+                  : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+              }
+            }
+          }
+        }
+
+        const kw = html.match(/<meta[^>]+(?:property|name)=["'](?:keywords|og:video:tag)["'][^>]+content=["']([^"']+)["']/i) ||
+                   html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:keywords|og:video:tag)["']/i);
+        if (kw && kw[1]) {
+          tags = kw[1].split(/[,|;]/).map(t => t.trim()).filter(t => t.length > 1 && t.length < 25).slice(0, 8);
+        }
+
+        const cleanText = (str) => (str || '')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#039;/g, "'")
+          .replace(/&ndash;/g, '-')
+          .replace(/&mdash;/g, '-')
+          .trim();
+
+        title = cleanText(title) || cleanDisplay(targetUrl);
+        description = cleanText(description) || `Watch ${title} online in HD quality.`;
+
+        let detectedCategory = 'General';
+        const lowerAll = `${title} ${description} ${tags.join(' ')}`.toLowerCase();
+        if (lowerAll.includes('desi') || lowerAll.includes('bhabhi') || lowerAll.includes('devar') || lowerAll.includes('patni') || lowerAll.includes('chudai')) {
+          detectedCategory = 'Desi';
+        } else if (lowerAll.includes('mms') || lowerAll.includes('leak') || lowerAll.includes('hidden') || lowerAll.includes('scandal')) {
+          detectedCategory = 'MMS';
+        } else if (lowerAll.includes('college') || lowerAll.includes('student') || lowerAll.includes('hostel')) {
+          detectedCategory = 'College';
+        } else if (lowerAll.includes('romance') || lowerAll.includes('romantic') || lowerAll.includes('couple') || lowerAll.includes('kiss')) {
+          detectedCategory = 'Romance';
+        } else if (lowerAll.includes('webseries') || lowerAll.includes('ullu') || lowerAll.includes('episode')) {
+          detectedCategory = 'Webseries';
+        } else if (lowerAll.includes('short') || lowerAll.includes('clip') || lowerAll.includes('reel')) {
+          detectedCategory = 'Shorts';
+        } else if (lowerAll.includes('viral') || lowerAll.includes('trending')) {
+          detectedCategory = 'Viral';
+        }
+
+        if (tags.length === 0) {
+          tags = [detectedCategory, 'Trending', 'Viral', 'HD'];
+        }
+
+        const views = Math.floor(Math.random() * 8500) + 1500;
+        const likes = Math.floor(views * 0.95);
+
+        return sendJson(res, 200, {
+          success: true,
+          title,
+          description,
+          thumbnail,
+          duration: duration || '',
+          tags,
+          category: detectedCategory,
+          views,
+          likes
+        });
+      } catch (err) {
+        return sendJson(res, 500, {
+          success: false,
+          message: `Failed to fetch metadata from link: ${err.message}`
+        });
+      }
     }
 
     // 2. GET /api/categories - list all categories with real video counts
@@ -389,6 +622,113 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // 2.4 GET /api/tags - list all tags with real video counts
+    if (pathname === '/api/tags' && req.method === 'GET') {
+      const rows = db.prepare('SELECT id, name, slug FROM tags ORDER BY name ASC').all();
+      const videoTags = db.prepare('SELECT tags FROM videos').all();
+      const tagCounts = {};
+      for (const row of (videoTags || [])) {
+        let list = [];
+        try {
+          list = typeof row.tags === 'string' ? JSON.parse(row.tags) : (row.tags || []);
+        } catch {
+          list = String(row.tags || '').split(',').map(s => s.trim());
+        }
+        if (Array.isArray(list)) {
+          for (const t of list) {
+            const lower = String(t).trim().toLowerCase();
+            tagCounts[lower] = (tagCounts[lower] || 0) + 1;
+          }
+        }
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        tags: rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          slug: r.slug,
+          count: tagCounts[r.name.toLowerCase()] || 0
+        }))
+      });
+    }
+
+    // 2.5 POST /api/tags - add new tag
+    if (pathname === '/api/tags' && req.method === 'POST') {
+      const body = await parseBody(req);
+      const name = (body.name || '').trim();
+      if (!name) {
+        return sendJson(res, 400, { success: false, message: 'Tag name is required' });
+      }
+      const slug = (body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+      try {
+        const insert = db.prepare('INSERT INTO tags (name, slug) VALUES (?, ?)');
+        const result = insert.run(name, slug);
+        return sendJson(res, 201, {
+          success: true,
+          tag: { id: Number(result.lastInsertRowid), name, slug, count: 0 },
+          message: 'Tag added successfully'
+        });
+      } catch (err) {
+        return sendJson(res, 400, { success: false, message: 'Tag already exists' });
+      }
+    }
+
+    // 2.6 PUT /api/tags/:id - edit tag
+    if (pathname.startsWith('/api/tags/') && req.method === 'PUT') {
+      const id = parseInt(pathname.replace('/api/tags/', ''), 10);
+      const body = await parseBody(req);
+      const newName = (body.name || '').trim();
+      if (!newName) {
+        return sendJson(res, 400, { success: false, message: 'Tag name is required' });
+      }
+      const existing = db.prepare('SELECT * FROM tags WHERE id = ?').get(id);
+      if (!existing) {
+        return sendJson(res, 404, { success: false, message: 'Tag not found' });
+      }
+      const slug = (body.slug || newName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+      db.prepare('UPDATE tags SET name = ?, slug = ? WHERE id = ?').run(newName, slug, id);
+
+      return sendJson(res, 200, {
+        success: true,
+        tag: { id, name: newName, slug },
+        message: 'Tag updated successfully'
+      });
+    }
+
+    // 2.7 DELETE /api/tags/:id - delete tag
+    if (pathname.startsWith('/api/tags/') && req.method === 'DELETE') {
+      const id = parseInt(pathname.replace('/api/tags/', ''), 10);
+      const existing = db.prepare('SELECT * FROM tags WHERE id = ?').get(id);
+      if (!existing) {
+        return sendJson(res, 404, { success: false, message: 'Tag not found' });
+      }
+      db.prepare('DELETE FROM tags WHERE id = ?').run(id);
+      return sendJson(res, 200, {
+        success: true,
+        message: `Tag "${existing.name}" deleted successfully`
+      });
+    }
+
+    // 2.8 POST /api/admin/clear-dummy - clear dummy test videos
+    if (pathname === '/api/admin/clear-dummy' && req.method === 'POST') {
+      const isAdmin = verifyAdminToken(req, ADMIN_EMAIL, JWT_SECRET);
+      if (!isAdmin) {
+        return sendJson(res, 401, { success: false, message: 'Unauthorized' });
+      }
+      const del = db.prepare(`
+        DELETE FROM videos 
+        WHERE title LIKE '%Gaming Montage%' 
+           OR title LIKE '%Never Gonna Give You Up%' 
+           OR title LIKE '%Secret Roadmap%'
+           OR videoUrl LIKE '%oceans.mp4%'
+      `).run();
+      return sendJson(res, 200, {
+        success: true,
+        message: `Cleared ${del.changes || 0} old dummy videos from database.`
+      });
+    }
+
     // 3. GET /api/videos - list & search videos with pagination & backend privacy enforcement
     if (pathname === '/api/videos' && req.method === 'GET') {
       const isAdmin = verifyAdminToken(req, ADMIN_EMAIL, JWT_SECRET);
@@ -398,6 +738,7 @@ const server = http.createServer(async (req, res) => {
       const offset = (page - 1) * limit;
       const search = (query.search || query.q || '').trim();
       const category = (query.category || '').trim();
+      const tag = (query.tag || '').trim();
       const statusFilter = (query.status || query.privacy || '').trim().toLowerCase();
       const sort = query.sort || 'newest';
 
@@ -422,6 +763,11 @@ const server = http.createServer(async (req, res) => {
       if (category && category.toLowerCase() !== 'all' && category.toLowerCase() !== 'all categories') {
         conditions.push('LOWER(category) = LOWER(?)');
         params.push(category);
+      }
+
+      if (tag) {
+        conditions.push('(tags LIKE ? OR tags LIKE ?)');
+        params.push(`%"${tag}"%`, `%, ${tag}%`);
       }
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -554,6 +900,19 @@ const server = http.createServer(async (req, res) => {
         WHERE id = ?
       `);
 
+      // Auto-register new tags into tags table
+      if (Array.isArray(data.tags)) {
+        try {
+          const insTag = db.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)');
+          for (const t of data.tags) {
+            const cleanT = String(t).trim();
+            if (cleanT) {
+              insTag.run(cleanT, cleanT.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+            }
+          }
+        } catch {}
+      }
+
       updateStmt.run(
         data.title !== undefined ? data.title : existing.title,
         data.description !== undefined ? data.description : existing.description,
@@ -591,6 +950,52 @@ const server = http.createServer(async (req, res) => {
       const initialViews = Number(data.initial_views ?? data.initialViews ?? 0);
       const initialLikes = Number(data.initial_likes ?? data.initialLikes ?? 0);
 
+      let finalVideoUrl = data.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4';
+      let finalThumbnail = data.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80';
+
+      // Save in Server: If saveToServer is requested, download remote files directly into backend/uploads
+      if (data.saveToServer) {
+        const uploadsDir = path.join(__dirname, 'uploads');
+        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+        const host = req.headers.host || `localhost:${PORT}`;
+
+        if (finalVideoUrl && (finalVideoUrl.startsWith('http://') || finalVideoUrl.startsWith('https://')) && !finalVideoUrl.includes('/uploads/')) {
+          try {
+            const vidRes = await fetch(finalVideoUrl, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            if (vidRes.ok) {
+              const buffer = Buffer.from(await vidRes.arrayBuffer());
+              const cType = vidRes.headers.get('content-type') || '';
+              const ext = cType.includes('webm') ? '.webm' : '.mp4';
+              const safeName = `video-${Date.now()}-${id}${ext}`;
+              fs.writeFileSync(path.join(uploadsDir, safeName), buffer);
+              finalVideoUrl = `http://${host}/uploads/${safeName}`;
+            }
+          } catch (e) {
+            console.warn('[Server Save] Could not save remote video:', e.message);
+          }
+        }
+
+        if (finalThumbnail && (finalThumbnail.startsWith('http://') || finalThumbnail.startsWith('https://')) && !finalThumbnail.includes('/uploads/')) {
+          try {
+            const thumbRes = await fetch(finalThumbnail, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            if (thumbRes.ok) {
+              const buffer = Buffer.from(await thumbRes.arrayBuffer());
+              const cType = thumbRes.headers.get('content-type') || '';
+              const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
+              const safeThumbName = `thumb-${Date.now()}-${id}${ext}`;
+              fs.writeFileSync(path.join(uploadsDir, safeThumbName), buffer);
+              finalThumbnail = `http://${host}/uploads/${safeThumbName}`;
+            }
+          } catch (e) {
+            console.warn('[Server Save] Could not save remote thumbnail:', e.message);
+          }
+        }
+      }
+
       const insertStmt = db.prepare(`
         INSERT INTO videos (
           id, title, description, duration, views, likes, dislikes, rating,
@@ -613,6 +1018,19 @@ const server = http.createServer(async (req, res) => {
         return String(val);
       };
 
+      // Auto-register new tags into tags table
+      if (Array.isArray(data.tags)) {
+        try {
+          const insTag = db.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)');
+          for (const t of data.tags) {
+            const cleanT = String(t).trim();
+            if (cleanT) {
+              insTag.run(cleanT, cleanT.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+            }
+          }
+        } catch {}
+      }
+
       insertStmt.run(
         id,
         data.title,
@@ -626,8 +1044,8 @@ const server = http.createServer(async (req, res) => {
         toSqlString(data.tags || []),
         data.uploadedAt || 'Just now',
         data.author || 'VIRALKAAM Admin',
-        data.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
-        data.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4',
+        finalThumbnail,
+        finalVideoUrl,
         data.hlsUrl || null,
         data.embedUrl || null,
         data.seoTitle || null,

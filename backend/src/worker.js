@@ -202,9 +202,11 @@ export default {
 
       // 0.2 GET /api/admin/stats
       if (pathname === '/api/admin/stats' && method === 'GET') {
+        await ensureD1Columns(env.DB);
         const totalVideos = (await env.DB.prepare('SELECT COUNT(*) as total FROM videos').first())?.total || 0;
         const totalViews = (await env.DB.prepare('SELECT COALESCE(SUM(views), 0) as total FROM videos').first())?.total || 0;
         const totalCategories = (await env.DB.prepare('SELECT COUNT(*) as total FROM categories').first())?.total || 0;
+        const totalTags = (await env.DB.prepare('SELECT COUNT(*) as total FROM tags').first())?.total || 0;
         
         const { results: recentRows } = await env.DB.prepare(`
           SELECT * FROM videos 
@@ -257,6 +259,7 @@ export default {
             totalVideos,
             totalViews,
             totalCategories,
+            totalTags,
             recentVideos: formattedRecent
           }
         });
@@ -273,6 +276,236 @@ export default {
           storage: 'Cloudflare R2',
           timestamp: new Date().toISOString()
         });
+      }
+
+      // 1.1 Fetch Video & Link Metadata for Auto-filling
+      if (pathname === '/api/fetch-meta' && (method === 'GET' || method === 'POST')) {
+        let targetUrl = '';
+        if (method === 'GET') {
+          targetUrl = url.searchParams.get('url') || '';
+        } else {
+          const body = await request.json().catch(() => ({}));
+          targetUrl = body.url || '';
+        }
+        targetUrl = targetUrl.trim();
+        if (!targetUrl) {
+          return json({ success: false, message: 'URL parameter is required' }, 400);
+        }
+
+        try {
+          // 1. If YouTube link
+          const ytMatch = targetUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+          if (ytMatch && ytMatch[1]) {
+            const ytId = ytMatch[1];
+            const thumbUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+            let ytTitle = '';
+            let ytAuthor = '';
+            try {
+              const oembedRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`);
+              if (oembedRes.ok) {
+                const oembedData = await oembedRes.json();
+                ytTitle = oembedData.title || '';
+                ytAuthor = oembedData.author_name || '';
+              }
+            } catch {}
+
+            const finalTitle = ytTitle || `YouTube Video (${ytId})`;
+            return json({
+              success: true,
+              title: finalTitle,
+              description: `Watch ${finalTitle} online in high definition streaming.`,
+              thumbnail: thumbUrl,
+              duration: '',
+              tags: ['YouTube', 'Viral', 'Trending', 'HD'],
+              category: 'Trending',
+              views: Math.floor(Math.random() * 8000) + 2500,
+              likes: Math.floor((Math.random() * 8000 + 2500) * 0.95),
+              author: ytAuthor || 'Admin'
+            });
+          }
+
+          // 2. Direct Video File (.mp4, .webm, .mkv, .mov, etc.)
+          const cleanDisplay = (raw) => {
+            try {
+              const u = new URL(raw);
+              const parts = u.pathname.split('/').filter(Boolean);
+              const last = parts[parts.length - 1] || '';
+              const withoutExt = decodeURIComponent(last).replace(/\.[a-zA-Z0-9]+$/, '');
+              return withoutExt.replace(/[-_+.]/g, ' ').replace(/\s+/g, ' ').trim();
+            } catch {
+              return 'Online Video Stream';
+            }
+          };
+
+          const isDirectVideo = /\.(mp4|webm|mkv|mov|avi|m3u8)(\?.*)?$/i.test(targetUrl);
+
+          // Fetch web page or headers
+          const pageRes = await fetch(targetUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+          });
+
+          if (!pageRes.ok && isDirectVideo) {
+            const title = cleanDisplay(targetUrl) || 'Stream Video';
+            return json({
+              success: true,
+              title,
+              description: `Watch ${title} in HD quality streaming.`,
+              thumbnail: '',
+              duration: '',
+              tags: ['Viral', 'Trending', 'HD'],
+              category: 'General',
+              views: Math.floor(Math.random() * 5000) + 1200,
+              likes: Math.floor((Math.random() * 5000 + 1200) * 0.94)
+            });
+          }
+
+          const contentType = pageRes.headers.get('content-type') || '';
+          if (contentType.includes('video/') || isDirectVideo) {
+            const title = cleanDisplay(targetUrl) || 'Stream Video';
+            return json({
+              success: true,
+              title,
+              description: `Watch ${title} in HD quality streaming on VIRALKAAM.`,
+              thumbnail: '',
+              duration: '',
+              tags: ['Viral', 'Trending', 'HD'],
+              category: 'General',
+              views: Math.floor(Math.random() * 6000) + 1500,
+              likes: Math.floor((Math.random() * 6000 + 1500) * 0.95)
+            });
+          }
+
+          // HTML Page Extraction
+          const html = await pageRes.text();
+          let title = '';
+          let description = '';
+          let thumbnail = '';
+          let duration = '';
+          let tags = [];
+
+          // OG Title / Twitter Title / <title>
+          const ogTitle = html.match(/<meta[^>]+(?:property|name)=["'](?:og:title|twitter:title)["'][^>]+content=["']([^"']+)["']/i) ||
+                          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
+          if (ogTitle && ogTitle[1]) {
+            title = ogTitle[1];
+          } else {
+            const docTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            if (docTitle && docTitle[1]) title = docTitle[1];
+          }
+
+          // OG Description / Meta Description
+          const ogDesc = html.match(/<meta[^>]+(?:property|name)=["'](?:og:description|description|twitter:description)["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:description|description|twitter:description)["']/i);
+          if (ogDesc && ogDesc[1]) description = ogDesc[1];
+
+          // OG Image / Twitter Image
+          const ogImg = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|og:image:url)["'][^>]+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image|og:image:url)["']/i) ||
+                        html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+          if (ogImg && ogImg[1]) {
+            thumbnail = ogImg[1];
+            if (thumbnail.startsWith('/')) {
+              try {
+                const u = new URL(targetUrl);
+                thumbnail = `${u.origin}${thumbnail}`;
+              } catch {}
+            }
+          }
+
+          // Video Duration
+          const ogDur = html.match(/<meta[^>]+(?:property|name)=["'](?:og:video:duration|video:duration)["'][^>]+content=["']([^"']+)["']/i) ||
+                        html.match(/"duration":\s*["']([^"']+)["']/i);
+          if (ogDur && ogDur[1]) {
+            const rawD = ogDur[1].trim();
+            if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(rawD)) {
+              duration = rawD;
+            } else {
+              const numSec = parseInt(rawD, 10);
+              if (!isNaN(numSec) && numSec > 0 && String(numSec) === rawD) {
+                const m = Math.floor(numSec / 60);
+                const s = numSec % 60;
+                duration = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+              } else {
+                const iso = rawD.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+                if (iso) {
+                  const h = parseInt(iso[1] || '0', 10);
+                  const m = parseInt(iso[2] || '0', 10);
+                  const s = parseInt(iso[3] || '0', 10);
+                  duration = h > 0 
+                    ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+                    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+                }
+              }
+            }
+          }
+
+          // Keywords / Tags
+          const kw = html.match(/<meta[^>]+(?:property|name)=["'](?:keywords|og:video:tag)["'][^>]+content=["']([^"']+)["']/i) ||
+                     html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:keywords|og:video:tag)["']/i);
+          if (kw && kw[1]) {
+            tags = kw[1].split(/[,|;]/).map(t => t.trim()).filter(t => t.length > 1 && t.length < 25).slice(0, 8);
+          }
+
+          // HTML decode entities
+          const cleanText = (str) => (str || '')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#039;/g, "'")
+            .replace(/&ndash;/g, '-')
+            .replace(/&mdash;/g, '-')
+            .trim();
+
+          title = cleanText(title) || cleanDisplay(targetUrl);
+          description = cleanText(description) || `Watch ${title} online in HD quality.`;
+
+          // Category detection
+          let detectedCategory = 'General';
+          const lowerAll = `${title} ${description} ${tags.join(' ')}`.toLowerCase();
+          if (lowerAll.includes('desi') || lowerAll.includes('bhabhi') || lowerAll.includes('devar') || lowerAll.includes('patni') || lowerAll.includes('chudai')) {
+            detectedCategory = 'Desi';
+          } else if (lowerAll.includes('mms') || lowerAll.includes('leak') || lowerAll.includes('hidden') || lowerAll.includes('scandal')) {
+            detectedCategory = 'MMS';
+          } else if (lowerAll.includes('college') || lowerAll.includes('student') || lowerAll.includes('hostel')) {
+            detectedCategory = 'College';
+          } else if (lowerAll.includes('romance') || lowerAll.includes('romantic') || lowerAll.includes('couple') || lowerAll.includes('kiss')) {
+            detectedCategory = 'Romance';
+          } else if (lowerAll.includes('webseries') || lowerAll.includes('ullu') || lowerAll.includes('episode')) {
+            detectedCategory = 'Webseries';
+          } else if (lowerAll.includes('short') || lowerAll.includes('clip') || lowerAll.includes('reel')) {
+            detectedCategory = 'Shorts';
+          } else if (lowerAll.includes('viral') || lowerAll.includes('trending')) {
+            detectedCategory = 'Viral';
+          }
+
+          if (tags.length === 0) {
+            tags = [detectedCategory, 'Trending', 'Viral', 'HD'];
+          }
+
+          const views = Math.floor(Math.random() * 8500) + 1500;
+          const likes = Math.floor(views * 0.95);
+
+          return json({
+            success: true,
+            title,
+            description,
+            thumbnail,
+            duration: duration || '',
+            tags,
+            category: detectedCategory,
+            views,
+            likes
+          });
+        } catch (err) {
+          return json({
+            success: false,
+            message: `Failed to fetch metadata from link: ${err.message}`
+          }, 500);
+        }
       }
 
       // 2. GET /api/categories
@@ -341,7 +574,103 @@ export default {
         return json({ success: true, message: `Category ${existing.name} removed and videos reassigned to General` });
       }
 
-      // 3. GET /api/videos (with search, category, privacy, sorting, pagination)
+      // 2.4 GET /api/tags - list all tags with real video counts
+      if (pathname === '/api/tags' && method === 'GET') {
+        await ensureD1Columns(env.DB);
+        const { results: tagRows } = await env.DB.prepare('SELECT id, name, slug FROM tags ORDER BY name ASC').all();
+        const { results: videoRows } = await env.DB.prepare('SELECT tags FROM videos').all();
+        
+        const tagCounts = {};
+        for (const row of (videoRows || [])) {
+          let list = [];
+          try {
+            list = typeof row.tags === 'string' ? JSON.parse(row.tags) : (row.tags || []);
+          } catch {
+            list = String(row.tags || '').split(',').map(s => s.trim());
+          }
+          if (Array.isArray(list)) {
+            for (const t of list) {
+              const lower = String(t).trim().toLowerCase();
+              tagCounts[lower] = (tagCounts[lower] || 0) + 1;
+            }
+          }
+        }
+
+        const tagsWithCounts = (tagRows || []).map(r => ({
+          id: r.id,
+          name: r.name,
+          slug: r.slug,
+          count: tagCounts[r.name.toLowerCase()] || 0
+        }));
+
+        return json({
+          success: true,
+          tags: tagsWithCounts
+        });
+      }
+
+      // 2.5 POST /api/tags - add new tag
+      if (pathname === '/api/tags' && method === 'POST') {
+        await ensureD1Columns(env.DB);
+        const body = await request.json().catch(() => ({}));
+        const name = (body.name || '').trim();
+        if (!name) return json({ success: false, message: 'Tag name is required' }, 400);
+        const slug = (body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+        try {
+          const res = await env.DB.prepare('INSERT INTO tags (name, slug) VALUES (?, ?)').bind(name, slug).run();
+          return json({
+            success: true,
+            tag: { id: res.meta?.last_row_id || Date.now(), name, slug, count: 0 },
+            message: 'Tag created successfully'
+          }, 201);
+        } catch {
+          return json({ success: false, message: 'Tag already exists' }, 400);
+        }
+      }
+
+      // 2.6 PUT /api/tags/:id - edit tag
+      if (pathname.startsWith('/api/tags/') && method === 'PUT') {
+        await ensureD1Columns(env.DB);
+        const id = parseInt(pathname.replace('/api/tags/', ''), 10);
+        const body = await request.json().catch(() => ({}));
+        const newName = (body.name || '').trim();
+        if (!newName) return json({ success: false, message: 'Tag name is required' }, 400);
+
+        const existing = await env.DB.prepare('SELECT * FROM tags WHERE id = ?').bind(id).first();
+        if (!existing) return json({ success: false, message: 'Tag not found' }, 404);
+
+        const slug = (body.slug || newName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+        await env.DB.prepare('UPDATE tags SET name = ?, slug = ? WHERE id = ?').bind(newName, slug, id).run();
+
+        return json({ success: true, tag: { id, name: newName, slug }, message: 'Tag updated' });
+      }
+
+      // 2.7 DELETE /api/tags/:id - delete tag
+      if (pathname.startsWith('/api/tags/') && method === 'DELETE') {
+        await ensureD1Columns(env.DB);
+        const id = parseInt(pathname.replace('/api/tags/', ''), 10);
+        const existing = await env.DB.prepare('SELECT * FROM tags WHERE id = ?').bind(id).first();
+        if (!existing) return json({ success: false, message: 'Tag not found' }, 404);
+
+        await env.DB.prepare('DELETE FROM tags WHERE id = ?').bind(id).run();
+        return json({ success: true, message: `Tag "${existing.name}" deleted` });
+      }
+
+      // 2.8 POST /api/admin/clear-dummy - delete old dummy test videos
+      if (pathname === '/api/admin/clear-dummy' && method === 'POST') {
+        const isAdmin = await verifyAdminToken(request);
+        if (!isAdmin) return json({ success: false, message: 'Unauthorized' }, 401);
+        await env.DB.prepare(`
+          DELETE FROM videos 
+          WHERE title LIKE '%Gaming Montage%' 
+             OR title LIKE '%Never Gonna Give You Up%' 
+             OR title LIKE '%Secret Roadmap%'
+             OR videoUrl LIKE '%oceans.mp4%'
+        `).run();
+        return json({ success: true, message: 'Dummy test data cleared successfully' });
+      }
+
+      // 3. GET /api/videos (with search, category, tag, privacy, sorting, pagination)
       if (pathname === '/api/videos' && method === 'GET') {
         const params = url.searchParams;
         const isAdmin = await verifyAdminToken(request);
@@ -351,6 +680,7 @@ export default {
         const offset = (page - 1) * limit;
         const search = (params.get('search') || params.get('q') || '').trim().slice(0, 100);
         const category = (params.get('category') || '').trim().slice(0, 50);
+        const tag = (params.get('tag') || '').trim().slice(0, 50);
         const statusFilter = (params.get('status') || params.get('privacy') || '').trim().toLowerCase();
         const sort = params.get('sort') || 'newest';
 
@@ -382,6 +712,11 @@ export default {
         if (category && category.toLowerCase() !== 'all' && category.toLowerCase() !== 'all categories') {
           conditions.push('LOWER(category) = LOWER(?)');
           bindings.push(category);
+        }
+
+        if (tag) {
+          conditions.push('(tags LIKE ? OR tags LIKE ?)');
+          bindings.push(`%"${tag}"%`, `%, ${tag}%`);
         }
 
         const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -560,6 +895,19 @@ export default {
         const initialViews = body.initial_views !== undefined ? Number(body.initial_views) : (body.initialViews !== undefined ? Number(body.initialViews) : Number(existing.initial_views || 0));
         const initialLikes = body.initial_likes !== undefined ? Number(body.initial_likes) : (body.initialLikes !== undefined ? Number(body.initialLikes) : Number(existing.initial_likes || 0));
 
+        // Auto-register new tags into tags table
+        if (Array.isArray(body.tags)) {
+          for (const t of body.tags) {
+            const cleanT = String(t).trim();
+            if (cleanT) {
+              const tSlug = cleanT.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+              try {
+                await env.DB.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)').bind(cleanT, tSlug).run();
+              } catch {}
+            }
+          }
+        }
+
         await env.DB.prepare(`
           UPDATE videos SET
             title = ?,
@@ -605,6 +953,24 @@ export default {
       async function ensureD1Columns(db) {
         if (!db) return;
         try {
+          await db.prepare(`
+            CREATE TABLE IF NOT EXISTS categories (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT UNIQUE NOT NULL,
+              slug TEXT UNIQUE NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+          `).run().catch(() => {});
+
+          await db.prepare(`
+            CREATE TABLE IF NOT EXISTS tags (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT UNIQUE NOT NULL,
+              slug TEXT UNIQUE NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+          `).run().catch(() => {});
+
           await db.prepare(`
             CREATE TABLE IF NOT EXISTS videos (
               id TEXT PRIMARY KEY,
@@ -682,6 +1048,52 @@ export default {
         const initialViews = Number(body.initial_views ?? body.initialViews ?? 0);
         const initialLikes = Number(body.initial_likes ?? body.initialLikes ?? 0);
 
+        let finalVideoUrl = body.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4';
+        let finalThumbnail = body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80';
+
+        // Save in Server: If saveToServer is enabled, download & host remote video & thumbnail directly in Cloudflare R2!
+        if (body.saveToServer && env.BUCKET) {
+          if (finalVideoUrl && (finalVideoUrl.startsWith('http://') || finalVideoUrl.startsWith('https://')) && !finalVideoUrl.includes('/cdn/') && !finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam')) {
+            try {
+              const remoteVid = await fetch(finalVideoUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+              });
+              if (remoteVid.ok && remoteVid.body) {
+                const cType = remoteVid.headers.get('content-type') || 'video/mp4';
+                const ext = cType.includes('webm') ? '.webm' : '.mp4';
+                const fileKey = `videos/${Date.now()}-${id}${ext}`;
+                await env.BUCKET.put(fileKey, remoteVid.body, {
+                  httpMetadata: { contentType: cType }
+                });
+                const edgeCdn = env.CDN_DOMAIN ? `https://${env.CDN_DOMAIN}/${fileKey}` : `/cdn/${fileKey}`;
+                finalVideoUrl = edgeCdn;
+              }
+            } catch (err) {
+              console.warn('[R2 Save] Could not stream video to R2:', err.message);
+            }
+          }
+
+          if (finalThumbnail && (finalThumbnail.startsWith('http://') || finalThumbnail.startsWith('https://')) && !finalThumbnail.includes('/cdn/') && !finalThumbnail.includes(env.CDN_DOMAIN || 'viralkaam')) {
+            try {
+              const remoteThumb = await fetch(finalThumbnail, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+              });
+              if (remoteThumb.ok && remoteThumb.body) {
+                const cType = remoteThumb.headers.get('content-type') || 'image/jpeg';
+                const ext = cType.includes('png') ? '.png' : cType.includes('webp') ? '.webp' : '.jpg';
+                const thumbKey = `thumbnails/${Date.now()}-${id}${ext}`;
+                await env.BUCKET.put(thumbKey, remoteThumb.body, {
+                  httpMetadata: { contentType: cType }
+                });
+                const edgeCdn = env.CDN_DOMAIN ? `https://${env.CDN_DOMAIN}/${thumbKey}` : `/cdn/${thumbKey}`;
+                finalThumbnail = edgeCdn;
+              }
+            } catch (err) {
+              console.warn('[R2 Save] Could not stream thumbnail to R2:', err.message);
+            }
+          }
+        }
+
         // Fetch actual live table columns in D1
         let availableCols = new Set();
         try {
@@ -702,8 +1114,8 @@ export default {
           tags: toSqlString(body.tags || []),
           uploadedAt: body.uploadedAt || 'Just now',
           author: body.author || 'VIRALKAAM Admin',
-          thumbnail: body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
-          videoUrl: body.videoUrl || 'https://vjs.zencdn.net/v/oceans.mp4',
+          thumbnail: finalThumbnail,
+          videoUrl: finalVideoUrl,
           hlsUrl: body.hlsUrl || null,
           embedUrl: body.embedUrl || null,
           seoTitle: body.seoTitle || null,
@@ -720,6 +1132,19 @@ export default {
         };
 
         // Filter to only columns that actually exist in the table
+        // Auto-register new tags into tags table
+        if (Array.isArray(body.tags)) {
+          for (const t of body.tags) {
+            const cleanT = String(t).trim();
+            if (cleanT) {
+              const tSlug = cleanT.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+              try {
+                await env.DB.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)').bind(cleanT, tSlug).run();
+              } catch {}
+            }
+          }
+        }
+
         const insertCols = availableCols.size > 0 
           ? Object.keys(allCandidateFields).filter(c => availableCols.has(c))
           : Object.keys(allCandidateFields);

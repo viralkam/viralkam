@@ -25,6 +25,13 @@ export function initDatabase() {
     insertCat.run(cat, cat.toLowerCase());
   }
 
+  // 3. Insert standard default tags
+  const defaultTags = ["Trending", "Desi", "Viral", "MMS", "Bhabhi", "Romance", "College", "HD"];
+  const insertTag = db.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)');
+  for (const tag of defaultTags) {
+    insertTag.run(tag, tag.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  }
+
   console.log('[Database] Clean database initialized with 0 dummy videos.');
   return db;
 }

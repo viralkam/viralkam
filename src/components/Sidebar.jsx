@@ -5,7 +5,10 @@ export default function Sidebar({
   setActiveFilter,
   activeCategory,
   setActiveCategory,
-  categories,
+  categories = [],
+  tags = [],
+  activeTag,
+  onSelectTag,
   onResetToHome
 }) {
   const filterOptions = [
@@ -57,6 +60,7 @@ export default function Sidebar({
               className="sidebar-see-all-link"
               onClick={() => {
                 setActiveCategory(null);
+                if (onSelectTag) onSelectTag(null);
                 onResetToHome();
               }}
             >
@@ -65,6 +69,30 @@ export default function Sidebar({
           </li>
         </ul>
       </div>
+
+      {tags && tags.length > 0 && (
+        <div className="sidebar-section">
+          <h3 className="sidebar-heading">Tags</h3>
+          <ul className="sidebar-menu">
+            {tags.map((t) => {
+              const name = typeof t === "string" ? t : t.name;
+              return (
+                <li key={name}>
+                  <button
+                    className={`sidebar-link ${activeTag === name ? "active" : ""}`}
+                    onClick={() => {
+                      if (onSelectTag) onSelectTag(name);
+                      onResetToHome();
+                    }}
+                  >
+                    #{name}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </aside>
   );
 }

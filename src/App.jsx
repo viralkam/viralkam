@@ -37,6 +37,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("newest"); // "newest" | "popular" | "most_viewed" | "longest" | "random"
   const [activeCategory, setActiveCategory] = useState(null);
+  const [activeTag, setActiveTag] = useState(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [activeLegalPage, setActiveLegalPage] = useState(null); // "dmca" | "compliance" | "terms" | null
   const [currentPage, setCurrentPage] = useState(1);
@@ -53,6 +54,7 @@ export default function App() {
         limit: VIDEOS_PER_PAGE,
         search: searchQuery.trim(),
         category: activeCategory || "",
+        tag: activeTag || "",
         sort: activeFilter || "newest"
       });
       if (res && res.videos) {
@@ -68,16 +70,16 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [searchQuery, activeCategory, activeFilter]);
+  }, [searchQuery, activeCategory, activeTag, activeFilter]);
 
   React.useEffect(() => {
     loadData(currentPage);
   }, [currentPage, loadData]);
 
-  // Reset page to 1 whenever search, category, or filter changes
+  // Reset page to 1 whenever search, category, tag, or filter changes
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, activeCategory, activeFilter]);
+  }, [searchQuery, activeCategory, activeTag, activeFilter]);
 
   const totalPages = Math.max(1, Math.ceil(totalVideosCount / VIDEOS_PER_PAGE));
   const paginatedVideos = videos;
@@ -184,6 +186,7 @@ export default function App() {
     setIsAdminOpen(false);
     setActiveLegalPage(null);
     setActiveCategory(null);
+    setActiveTag(null);
     setActiveFilter("newest");
     setSearchQuery("");
     window.history.pushState({}, "", "/");
@@ -192,6 +195,17 @@ export default function App() {
 
   const handleSelectCategory = (cat) => {
     setActiveCategory(cat);
+    setActiveTag(null);
+    setSelectedVideo(null);
+    setIsAdminOpen(false);
+    setActiveLegalPage(null);
+    window.history.pushState({}, "", "/");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleSelectTag = (tagName) => {
+    setActiveTag(tagName);
+    setActiveCategory(null);
     setSelectedVideo(null);
     setIsAdminOpen(false);
     setActiveLegalPage(null);
@@ -215,16 +229,29 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Dynamic categories state loaded from backend
+  // Dynamic categories and tags state loaded from backend / database
   const [categories, setCategories] = useState(CATEGORIES);
+  const [tags, setTags] = useState([]);
 
-  React.useEffect(() => {
-    api.getCategories().then((cats) => {
+  const refreshCategoriesAndTags = React.useCallback(async () => {
+    try {
+      const cats = await api.getCategories();
       if (cats && cats.length > 0) {
         setCategories(cats.map((c) => c.name));
       }
-    }).catch(() => {});
+    } catch {}
+
+    try {
+      const tList = await api.getTags();
+      if (tList && tList.length > 0) {
+        setTags(tList);
+      }
+    } catch {}
   }, []);
+
+  React.useEffect(() => {
+    refreshCategoriesAndTags();
+  }, [refreshCategoriesAndTags]);
 
   const handleAddVideo = async (newVideo) => {
     // 1. Strictly save to Cloudflare D1 / Database Storage
@@ -286,10 +313,13 @@ export default function App() {
         isAdminActive={isAdminOpen}
         categories={categories}
         onSelectCategory={handleSelectCategory}
+        tags={tags}
+        onSelectTag={handleSelectTag}
         activeFilter={activeFilter}
         setActiveFilter={(f) => {
           setActiveFilter(f);
           setActiveCategory(null);
+          setActiveTag(null);
         }}
       />
 
@@ -312,6 +342,7 @@ export default function App() {
             onSelectVideo={handleSelectVideo}
             onNavigateHome={handleNavigateHome}
             onSelectCategory={handleSelectCategory}
+            onSelectTag={handleSelectTag}
             onSelectLegalPage={handleOpenLegalPage}
           />
         </main>
@@ -324,12 +355,17 @@ export default function App() {
             setActiveFilter={(f) => {
               setActiveFilter(f);
               setActiveCategory(null);
+              setActiveTag(null);
             }}
             activeCategory={activeCategory}
             setActiveCategory={(cat) => {
               setActiveCategory(cat);
+              setActiveTag(null);
             }}
-            categories={CATEGORIES}
+            categories={categories}
+            tags={tags}
+            activeTag={activeTag}
+            onSelectTag={handleSelectTag}
             onResetToHome={() => {
               setSelectedVideo(null);
               setIsAdminOpen(false);
@@ -344,6 +380,31 @@ export default function App() {
                 <p className="category-page-sub">
                   Top {activeCategory} Daily Updated Latest Viral Videos
                 </p>
+              </div>
+            )}
+
+            {activeTag && (
+              <div className="category-page-header">
+                <h1 className="category-page-title">#{activeTag}</h1>
+                <p className="category-page-sub">
+                  Top #{activeTag} Daily Updated Latest Viral Videos
+                </p>
+                <button
+                  type="button"
+                  style={{
+                    marginTop: "10px",
+                    background: "rgba(255, 255, 255, 0.15)",
+                    border: "1px solid rgba(255, 255, 255, 0.3)",
+                    color: "#fff",
+                    borderRadius: "20px",
+                    padding: "4px 14px",
+                    fontSize: "0.8rem",
+                    cursor: "pointer"
+                  }}
+                  onClick={() => setActiveTag(null)}
+                >
+                  ✕ Clear Tag Filter
+                </button>
               </div>
             )}
 

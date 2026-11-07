@@ -9,12 +9,15 @@ export default function Navbar({
   isAdminActive,
   categories,
   onSelectCategory,
+  tags = [],
+  onSelectTag,
   activeFilter,
   setActiveFilter
 }) {
   const [showSearchInput, setShowSearchInput] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showCategoriesDropdown, setShowCategoriesDropdown] = useState(false);
+  const [showTagsDropdown, setShowTagsDropdown] = useState(false);
 
   const filterOptions = [
     { id: "newest", label: "Newest" },
@@ -122,10 +125,43 @@ export default function Navbar({
               )}
             </div>
 
-            {/* Tags Link */}
-            <button className="nav-text-link" onClick={onNavigateHome}>
-              Tags
-            </button>
+            {/* Tags Dropdown */}
+            <div className="nav-dropdown-wrapper">
+              <button
+                className="nav-text-link"
+                onClick={() => {
+                  setShowTagsDropdown(!showTagsDropdown);
+                  setShowCategoriesDropdown(false);
+                }}
+              >
+                Tags
+              </button>
+              {showTagsDropdown && (
+                <div className="categories-menu-dropdown tags-menu-dropdown">
+                  {tags.length > 0 ? (
+                    tags.map((t) => {
+                      const name = typeof t === "string" ? t : t.name;
+                      return (
+                        <button
+                          key={name}
+                          className="cat-dropdown-item"
+                          onClick={() => {
+                            if (onSelectTag) onSelectTag(name);
+                            setShowTagsDropdown(false);
+                          }}
+                        >
+                          #{name}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div style={{ padding: "8px 12px", color: "#64748b", fontSize: "0.8rem" }}>
+                      No tags available
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Home Black Pill */}
             <button
@@ -193,6 +229,28 @@ export default function Navbar({
                 </button>
               </li>
             ))}
+
+            {tags.length > 0 && (
+              <>
+                <li className="mobile-menu-divider">Tags</li>
+                {tags.map((t) => {
+                  const name = typeof t === "string" ? t : t.name;
+                  return (
+                    <li key={name}>
+                      <button
+                        className="mobile-drawer-link"
+                        onClick={() => {
+                          if (onSelectTag) onSelectTag(name);
+                          setShowMobileMenu(false);
+                        }}
+                      >
+                        #{name}
+                      </button>
+                    </li>
+                  );
+                })}
+              </>
+            )}
           </ul>
         </div>
       )}

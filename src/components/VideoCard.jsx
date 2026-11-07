@@ -21,7 +21,6 @@ export default function VideoCard({ video, onSelectVideo }) {
           loading="lazy" 
           onError={(e) => { e.currentTarget.src = FALLBACK_THUMBNAIL; }}
         />
-        {video.duration && <span className="duration-tag">{video.duration}</span>}
       </div>
 
       <div className="video-card-infos">
@@ -30,17 +29,15 @@ export default function VideoCard({ video, onSelectVideo }) {
         </h3>
 
         <div className="video-datas">
-          <span className="views-number">
+          <span className="views-number" title={`${video.views || 0} views`}>
             <Eye size={12} className="meta-icon" />
             {video.views ? formatViews(video.views) : "0"}
           </span>
 
-          {video.rating && (
-            <span className="rating-score">
-              <ThumbsUp size={12} className="meta-icon" />
-              {video.rating}%
-            </span>
-          )}
+          <span className="rating-score" title={`${video.likes || 0} likes`}>
+            <ThumbsUp size={12} className="meta-icon" />
+            {video.likes !== undefined && video.likes !== null ? formatViews(video.likes) : "0"}
+          </span>
 
           {video.duration && <span className="data-duration">{video.duration}</span>}
         </div>

@@ -24,7 +24,11 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  History
+  History,
+  Tag,
+  Server,
+  Zap,
+  RefreshCw
 } from "lucide-react";
 import { api } from "../services/api";
 import { uploadHistory } from "../services/uploadHistory";
@@ -73,6 +77,12 @@ export default function AdminPanel({
   const [editingCatId, setEditingCatId] = useState(null);
   const [editingCatName, setEditingCatName] = useState("");
 
+  // Live Tags from Database
+  const [tagsList, setTagsList] = useState([]);
+  const [newTagName, setNewTagName] = useState("");
+  const [editingTagId, setEditingTagId] = useState(null);
+  const [editingTagName, setEditingTagName] = useState("");
+
   // Videos management state
   const [videosList, setVideosList] = useState(initialVideos);
   const [videosCount, setVideosCount] = useState(initialVideos.length);
@@ -87,11 +97,21 @@ export default function AdminPanel({
   // Video Preview Modal
   const [previewVideo, setPreviewVideo] = useState(null);
 
-  // Excel Export Modal State
+  // Excel Export State (Date-based and Full data export)
   const [showExportModal, setShowExportModal] = useState(false);
+  const [exportDateMode, setExportDateMode] = useState("all"); // "all" | "upto" | "range" | "today" | "last7" | "last30"
+  const [exportEndDate, setExportEndDate] = useState(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  });
+  const [exportStartDate, setExportStartDate] = useState("");
+  const [exportCategoryFilter, setExportCategoryFilter] = useState("all");
+  const [exportPrivacyFilter, setExportPrivacyFilter] = useState("all");
+  const [allExportVideos, setAllExportVideos] = useState([]);
+  const [isLoadingAllVideos, setIsLoadingAllVideos] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [exportIncludeStorage, setExportIncludeStorage] = useState(true);
   const [exportIncludeLinks, setExportIncludeLinks] = useState(true);
-  const [isExporting, setIsExporting] = useState(false);
 
   // Edit Video State
   const [editingVideo, setEditingVideo] = useState(null);
@@ -103,7 +123,9 @@ export default function AdminPanel({
   const [uploadTab, setUploadTab] = useState("single");
 
   // Single Upload Form State (supports both local file upload & direct CDN link)
-  const [singleSourceType, setSingleSourceType] = useState("file"); // "file" | "link"
+  const [singleSourceType, setSingleSourceType] = useState("file"); // "file" | "link" | "excel"
+  const [saveToServer, setSaveToServer] = useState(true);
+  const [isFetchingMeta, setIsFetchingMeta] = useState(false);
   const [singleFile, setSingleFile] = useState(null);
   const [singleVideoUrl, setSingleVideoUrl] = useState("");
   const [singleTitle, setSingleTitle] = useState("");
@@ -192,6 +214,13 @@ export default function AdminPanel({
         }
       }
     } catch {}
+
+    try {
+      const tags = await api.getTags();
+      if (tags && tags.length > 0) {
+        setTagsList(tags);
+      }
+    } catch {}
   };
 
   useEffect(() => {
@@ -222,6 +251,29 @@ export default function AdminPanel({
       setIsLoadingVideos(false);
     }
   };
+
+  const loadAllVideosForExport = async () => {
+    setIsLoadingAllVideos(true);
+    try {
+      const fullList = await api.getAllVideosForExport();
+      if (fullList && fullList.length > 0) {
+        setAllExportVideos(fullList);
+      } else {
+        setAllExportVideos(videosList.length > 0 ? videosList : initialVideos);
+      }
+    } catch (err) {
+      console.warn("[Export] Falling back to local videos:", err);
+      setAllExportVideos(videosList.length > 0 ? videosList : initialVideos);
+    } finally {
+      setIsLoadingAllVideos(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeNav === "export") {
+      loadAllVideosForExport();
+    }
+  }, [activeNav]);
 
   useEffect(() => {
     if (activeNav === "videos" || activeNav === "dashboard") {
@@ -378,6 +430,131 @@ export default function AdminPanel({
     }
   };
 
+  const handleAutoFetchMetadata = async (urlToFetch) => {
+    let target = (urlToFetch !== undefined ? urlToFetch : (singleVideoUrl || linkUrl)).trim();
+    if (!target) {
+      showError("Please enter a video URL first.");
+      return;
+    }
+    // Clean iframe src if pasted (e.g. from embed code)
+    const iframeMatch = target.match(/src=["']([^"']+)["']/i);
+    if (iframeMatch && iframeMatch[1]) {
+      target = iframeMatch[1].trim();
+    }
+    setSingleVideoUrl(target);
+    setLinkUrl(target);
+
+    setIsFetchingMeta(true);
+    try {
+      const data = await api.fetchMetadata(target);
+      if (data && data.success) {
+        if (data.title) {
+          setSingleTitle(data.title);
+          setLinkTitle(data.title);
+        }
+        if (data.description) {
+          setSingleDescription(data.description);
+          setLinkDescription(data.description);
+        }
+        if (data.thumbnail) {
+          setSingleThumbnail(data.thumbnail);
+          setSingleThumbnailUrl(data.thumbnail);
+          setLinkThumbnail(data.thumbnail);
+        }
+        if (data.duration) {
+          setSingleDuration(data.duration);
+          setLinkDuration(data.duration);
+        }
+        if (data.category) {
+          const match = categoriesList.find(c => c.name.toLowerCase() === data.category.toLowerCase());
+          const catToSet = match ? match.name : data.category;
+          setSingleCategory(catToSet);
+          setLinkCategory(catToSet);
+        }
+        if (data.tags && Array.isArray(data.tags) && data.tags.length > 0) {
+          const combined = Array.from(new Set([...singleTags, ...data.tags]));
+          setSingleTags(combined);
+          setLinkTags(combined);
+        } else if (singleTags.length === 0) {
+          const fallbackTags = ["Viral", "Trending", "HD"];
+          setSingleTags(fallbackTags);
+          setLinkTags(fallbackTags);
+        }
+        const defaultViews = data.views ? String(data.views) : String(Math.floor(Math.random() * 4000) + 1500);
+        const defaultLikes = data.likes ? String(data.likes) : String(Math.floor(Number(defaultViews) * 0.94));
+        setSingleInitialViews(defaultViews);
+        setLinkInitialViews(defaultViews);
+        setSingleInitialLikes(defaultLikes);
+        setLinkInitialLikes(defaultLikes);
+
+        showSuccess("✓ Video title, thumbnail, duration, category & tags auto-fetched!");
+      } else {
+        const suggested = cleanDisplayTitle(target);
+        if (suggested) {
+          setSingleTitle(suggested);
+          setLinkTitle(suggested);
+        }
+        detectVideoMeta(target).then((meta) => {
+          if (meta.duration) {
+            setSingleDuration(meta.duration);
+            setLinkDuration(meta.duration);
+          }
+          if (meta.thumbnail && !singleThumbnail && !singleThumbnailUrl) {
+            setSingleThumbnail(meta.thumbnail);
+            setSingleThumbnailUrl(meta.thumbnail);
+            setLinkThumbnail(meta.thumbnail);
+          }
+        });
+        const defaultViews = String(Math.floor(Math.random() * 4000) + 1500);
+        const defaultLikes = String(Math.floor(Number(defaultViews) * 0.94));
+        if (!singleInitialViews) {
+          setSingleInitialViews(defaultViews);
+          setLinkInitialViews(defaultViews);
+        }
+        if (!singleInitialLikes) {
+          setSingleInitialLikes(defaultLikes);
+          setLinkInitialLikes(defaultLikes);
+        }
+        if (singleTags.length === 0) {
+          setSingleTags(["Viral", "Trending", "HD"]);
+          setLinkTags(["Viral", "Trending", "HD"]);
+        }
+        showSuccess("✓ Video link recognized. Basic details auto-filled.");
+      }
+    } catch (err) {
+      console.warn("Auto-fetch error:", err);
+      const ytMatch = target.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+      if (ytMatch && ytMatch[1]) {
+        const ytId = ytMatch[1];
+        const ytThumb = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+        setSingleThumbnail(ytThumb);
+        setSingleThumbnailUrl(ytThumb);
+        setLinkThumbnail(ytThumb);
+        if (!singleTitle) {
+          setSingleTitle(`YouTube Video (${ytId})`);
+          setLinkTitle(`YouTube Video (${ytId})`);
+        }
+      } else {
+        const suggested = cleanDisplayTitle(target);
+        if (suggested && !singleTitle) {
+          setSingleTitle(suggested);
+          setLinkTitle(suggested);
+        }
+      }
+      if (!singleInitialViews) {
+        const dV = String(Math.floor(Math.random() * 4000) + 1500);
+        setSingleInitialViews(dV);
+        setSingleInitialLikes(String(Math.floor(Number(dV) * 0.94)));
+      }
+      if (singleTags.length === 0) {
+        setSingleTags(["Viral", "Trending"]);
+      }
+      showSuccess("✓ Video link recognized and defaults filled.");
+    } finally {
+      setIsFetchingMeta(false);
+    }
+  };
+
   const handleAddSingleTag = () => {
     const trimmed = singleTagInput.trim().replace(/^,|,$/g, "");
     if (trimmed && !singleTags.includes(trimmed)) {
@@ -391,7 +568,7 @@ export default function AdminPanel({
   };
 
   const handleSingleUploadSubmit = async (e) => {
-    e.preventDefault();
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
     setSingleUploadSuccessVideo(null);
     setSingleUploadError("");
 
@@ -405,15 +582,16 @@ export default function AdminPanel({
       return;
     }
 
-    if (singleSourceType === "link" && !singleVideoUrl.trim()) {
-      showError("Please enter a direct video URL.");
+    const currentUrl = (singleVideoUrl || linkUrl).trim();
+    if (singleSourceType === "link" && !currentUrl) {
+      showError("Please enter a video URL.");
       return;
     }
 
     const historyId = `up-${Date.now()}`;
-    const uploadMethod = singleSourceType === "file" ? "Single Upload (File)" : "Single Upload (Direct Link)";
-    const fileNameDesc = singleSourceType === "file" ? singleFile.name : singleVideoUrl.trim();
-    const sizeStr = singleSourceType === "file" ? `${(singleFile.size / (1024 * 1024)).toFixed(2)} MB` : "Direct Stream";
+    const uploadMethod = singleSourceType === "file" ? "Single Upload (File)" : "Upload via Link";
+    const fileNameDesc = singleSourceType === "file" ? singleFile.name : currentUrl;
+    const sizeStr = singleSourceType === "file" ? `${(singleFile.size / (1024 * 1024)).toFixed(2)} MB` : (saveToServer ? "Save to Server" : "Direct Link");
 
     uploadHistory.addItem({
       id: historyId,
@@ -422,16 +600,16 @@ export default function AdminPanel({
       fileName: fileNameDesc,
       fileSize: sizeStr,
       duration: singleDuration.trim(),
-      thumbnail: singleThumbnailUrl.trim() || singleThumbnail || FALLBACK_THUMBNAIL,
+      thumbnail: singleThumbnailUrl.trim() || singleThumbnail || linkThumbnail || FALLBACK_THUMBNAIL,
       status: "uploading",
       progress: 10,
-      currentStep: singleSourceType === "file" ? "Uploading video to Cloudflare R2 / Server storage..." : "Verifying video stream..."
+      currentStep: singleSourceType === "file" ? "Uploading video to Server storage..." : (saveToServer ? "Downloading & saving video to server storage..." : "Saving video link to database...")
     });
     refreshHistory();
 
     setIsUploadingSingle(true);
     setSingleUploadProgress(0);
-    setSingleUploadStep(singleSourceType === "file" ? "Starting upload to server storage..." : "Verifying video stream...");
+    setSingleUploadStep(singleSourceType === "file" ? "Starting upload to server storage..." : (saveToServer ? "Streaming video to server storage..." : "Saving video details..."));
 
     try {
       let finalVideoUrl = "";
@@ -448,12 +626,12 @@ export default function AdminPanel({
           refreshHistory();
         });
       } else {
-        finalVideoUrl = cleanVideoUrl(singleVideoUrl.trim());
+        finalVideoUrl = cleanVideoUrl(currentUrl);
       }
 
       setSingleUploadProgress(88);
       setSingleUploadStep("Processing thumbnail...");
-      let finalThumbnailUrl = singleThumbnailUrl.trim() || singleThumbnail;
+      let finalThumbnailUrl = singleThumbnailUrl.trim() || singleThumbnail || linkThumbnail;
       if (singleThumbnailFile) {
         finalThumbnailUrl = await api.uploadVideoFile(singleThumbnailFile);
       }
@@ -480,7 +658,8 @@ export default function AdminPanel({
         views: initialViewsNum,
         likes: initialLikesNum,
         author: "Admin",
-        uploadedAt: "Just now"
+        uploadedAt: "Just now",
+        saveToServer: saveToServer
       };
 
       setSingleUploadProgress(95);
@@ -647,7 +826,8 @@ export default function AdminPanel({
           views: 0,
           likes: 0,
           author: "Admin",
-          uploadedAt: "Just now"
+          uploadedAt: "Just now",
+          saveToServer: saveToServer
         };
 
         const saved = await api.createVideo(newVideo);
@@ -743,7 +923,7 @@ export default function AdminPanel({
   };
 
   const handleLinkImportSubmit = async (e) => {
-    e.preventDefault();
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
     if (!linkUrl.trim()) {
       showError("Please enter a video URL.");
       return;
@@ -800,7 +980,8 @@ export default function AdminPanel({
         views: initialViewsNum,
         likes: initialLikesNum,
         author: "Admin",
-        uploadedAt: "Just now"
+        uploadedAt: "Just now",
+        saveToServer: saveToServer
       };
 
       const saved = await api.createVideo(newVideo);
@@ -889,52 +1070,96 @@ export default function AdminPanel({
     XLSX.writeFile(workbook, "video_import_template.xlsx");
   };
 
-  // Helper to determine if video is stored on user's Cloudflare R2 storage
-  const isServerStorageVideo = (v) => {
-    const url = (v?.videoUrl || "").toLowerCase();
-    return (
-      url.includes("/cdn/") ||
-      url.includes("r2.cloudflarestorage.com") ||
-      url.includes(".r2.dev") ||
-      url.includes("viralkaam-videos") ||
-      url.includes("viralkam-videos") ||
-      url.includes("vcdn.")
-    );
-  };
+  // Extract and parse video publish date
+  const getVideoDate = (v) => {
+    const candidate = v?.created_at || v?.uploadedAt;
+    if (!candidate) return null;
 
-  // Full Data Excel Export Handler (.xlsx format with selection for R2 storage vs external links)
-  const handleExportToExcel = async () => {
-    if (!exportIncludeStorage && !exportIncludeLinks) {
-      showError("Kripya kam se kam ek option select karein (Cloudflare R2 ya Link wali).");
-      return;
+    if (typeof candidate === "string") {
+      const dmy = candidate.trim().match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+      if (dmy) {
+        const day = parseInt(dmy[1], 10);
+        const month = parseInt(dmy[2], 10) - 1;
+        const year = parseInt(dmy[3], 10);
+        return new Date(year, month, day);
+      }
     }
 
-    setIsExporting(true);
-    try {
-      let allVideos = [];
-      try {
-        const fullList = await api.getAllVideosForExport();
-        if (fullList && fullList.length > 0) {
-          allVideos = fullList;
-        } else {
-          allVideos = videosList.length > 0 ? videosList : initialVideos;
-        }
-      } catch (err) {
-        console.warn("[Export] Falling back to local videosList:", err);
-        allVideos = videosList.length > 0 ? videosList : initialVideos;
+    const d = new Date(candidate);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+  };
+
+  // Filter videos based on publish date, category and privacy
+  const getFilteredExportVideos = () => {
+    const sourceList = allExportVideos.length > 0 ? allExportVideos : (videosList.length > 0 ? videosList : initialVideos);
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    return sourceList.filter((v) => {
+      // Category filter
+      if (exportCategoryFilter !== "all" && (v.category || "General").toLowerCase() !== exportCategoryFilter.toLowerCase()) {
+        return false;
       }
 
-      // Filter based on user selection
-      const filteredVideos = allVideos.filter((v) => {
-        const isStorage = isServerStorageVideo(v);
-        if (exportIncludeStorage && exportIncludeLinks) return true;
-        if (exportIncludeStorage && isStorage) return true;
-        if (exportIncludeLinks && !isStorage) return true;
-        return false;
-      });
+      // Privacy filter
+      const vPriv = (v.privacy || v.status || "public").toLowerCase();
+      if (exportPrivacyFilter === "public" && vPriv === "private") return false;
+      if (exportPrivacyFilter === "private" && vPriv !== "private") return false;
+
+      // Date filtering
+      if (exportDateMode === "all") return true;
+
+      const vDate = getVideoDate(v);
+      if (!vDate) {
+        return exportDateMode === "all" || exportDateMode === "today";
+      }
+
+      const vYear = vDate.getFullYear();
+      const vMonth = String(vDate.getMonth() + 1).padStart(2, "0");
+      const vDay = String(vDate.getDate()).padStart(2, "0");
+      const vDateStr = `${vYear}-${vMonth}-${vDay}`;
+
+      if (exportDateMode === "today") {
+        return vDateStr === todayStr;
+      }
+
+      if (exportDateMode === "last7") {
+        const past7 = new Date();
+        past7.setDate(past7.getDate() - 7);
+        past7.setHours(0, 0, 0, 0);
+        return vDate >= past7;
+      }
+
+      if (exportDateMode === "last30") {
+        const past30 = new Date();
+        past30.setDate(past30.getDate() - 30);
+        past30.setHours(0, 0, 0, 0);
+        return vDate >= past30;
+      }
+
+      if (exportDateMode === "upto" && exportEndDate) {
+        return vDateStr <= exportEndDate;
+      }
+
+      if (exportDateMode === "range") {
+        if (exportStartDate && vDateStr < exportStartDate) return false;
+        if (exportEndDate && vDateStr > exportEndDate) return false;
+        return true;
+      }
+
+      return true;
+    });
+  };
+
+  // Full Data Excel Export Handler (.xlsx format with date filter)
+  const handleExecuteExcelExport = async () => {
+    setIsExporting(true);
+    try {
+      const filteredVideos = getFilteredExportVideos();
 
       if (filteredVideos.length === 0) {
-        showError("Chune gaye option ke hisaab se koi video nahi mili.");
+        showError("Is date filter ke hisaab se koi video nahi mili.");
         setIsExporting(false);
         return;
       }
@@ -965,7 +1190,7 @@ export default function AdminPanel({
             const month = String(now.getMonth() + 1).padStart(2, "0");
             uploadDate = `${day}/${month}/${now.getFullYear()}`;
           }
-          uploadTime = v.uploadTime || "00:00:00";
+          uploadTime = v.uploadTime || "12:00:00";
         }
 
         // Tags formatting
@@ -999,7 +1224,6 @@ export default function AdminPanel({
         const safeThumbnail = (() => {
           const t = String(v.thumbnail || "");
           if (!t) return "";
-          // If thumbnail is a massive base64 string (>30000 chars), use fallback to avoid breaking Excel
           if (t.startsWith("data:") && t.length > 30000) {
             return FALLBACK_THUMBNAIL;
           }
@@ -1009,7 +1233,7 @@ export default function AdminPanel({
         return {
           "Video URL": safeExcelStr(v.videoUrl || ""),
           "Thumbnail URL": safeThumbnail,
-          "Title": safeExcelStr(v.title || ""),
+          "Title": safeExcelStr(cleanDisplayTitle(v.title || "")),
           "Description": safeExcelStr(v.description || ""),
           "Category": safeExcelStr(v.category || "General"),
           "Tags": safeExcelStr(tagsStr),
@@ -1050,18 +1274,24 @@ export default function AdminPanel({
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Videos");
 
-      let fileTypeLabel = "all";
-      if (exportIncludeStorage && !exportIncludeLinks) fileTypeLabel = "r2_storage";
-      if (!exportIncludeStorage && exportIncludeLinks) fileTypeLabel = "external_links";
+      let dateSlug = "all_videos";
+      if (exportDateMode === "upto" && exportEndDate) {
+        dateSlug = `upto_${exportEndDate}`;
+      } else if (exportDateMode === "range" && (exportStartDate || exportEndDate)) {
+        dateSlug = `${exportStartDate || "start"}_to_${exportEndDate || "end"}`;
+      } else if (exportDateMode === "today") {
+        dateSlug = "today";
+      } else if (exportDateMode === "last7") {
+        dateSlug = "last_7_days";
+      } else if (exportDateMode === "last30") {
+        dateSlug = "last_30_days";
+      }
 
-      const now = new Date();
-      const dateTag = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      const fileName = `viralkaam_videos_${fileTypeLabel}_${dateTag}.xlsx`;
+      const fileName = `viralkaam_videos_${dateSlug}.xlsx`;
 
       XLSX.writeFile(workbook, fileName);
 
       showSuccess(`Successfully exported ${excelRows.length} videos to ${fileName}!`);
-      setShowExportModal(false);
     } catch (err) {
       console.error("[Export] Error generating excel:", err);
       showError("Export fail ho gaya: " + err.message);
@@ -1195,7 +1425,8 @@ export default function AdminPanel({
           views: row.initialViews,
           likes: row.initialLikes,
           author: "Admin",
-          uploadedAt: "Just now"
+          uploadedAt: "Just now",
+          saveToServer: saveToServer
         };
 
         const saved = await api.createVideo(newVideo);
@@ -1419,6 +1650,64 @@ export default function AdminPanel({
     }
   };
 
+  // ==========================================
+  // TAGS HANDLERS
+  // ==========================================
+  const handleAddTag = async (e) => {
+    e.preventDefault();
+    if (!newTagName.trim()) return;
+
+    try {
+      await api.createTag(newTagName.trim());
+      showSuccess(`Tag "${newTagName.trim()}" added successfully!`);
+      setNewTagName("");
+      loadStatsAndCategories();
+    } catch (err) {
+      showError(err.message || "Failed to add tag.");
+    }
+  };
+
+  const handleUpdateTag = async (id) => {
+    if (!editingTagName.trim()) return;
+
+    try {
+      await api.updateTag(id, editingTagName.trim());
+      showSuccess(`Tag updated to "${editingTagName.trim()}"!`);
+      setEditingTagId(null);
+      setEditingTagName("");
+      loadStatsAndCategories();
+      loadVideos();
+    } catch (err) {
+      showError(err.message || "Failed to update tag.");
+    }
+  };
+
+  const handleDeleteTag = async (tag) => {
+    if (window.confirm(`Are you sure you want to delete tag "${tag.name}"?`)) {
+      try {
+        await api.deleteTag(tag.id);
+        showSuccess(`Tag "${tag.name}" deleted successfully.`);
+        loadStatsAndCategories();
+        loadVideos();
+      } catch (err) {
+        showError(err.message || "Failed to delete tag.");
+      }
+    }
+  };
+
+  const handleClearDummyData = async () => {
+    if (window.confirm("Are you sure you want to clean old dummy/test videos from the database?")) {
+      try {
+        const res = await api.clearDummyData();
+        showSuccess(res.message || "Old dummy data cleared successfully!");
+        loadStatsAndCategories();
+        loadVideos();
+      } catch (err) {
+        showError(err.message || "Failed to clear dummy data.");
+      }
+    }
+  };
+
   // Total pages calculation
   const totalPages = Math.max(1, Math.ceil(videosCount / videosLimit));
 
@@ -1489,6 +1778,53 @@ export default function AdminPanel({
           >
             <FolderOpen size={18} />
             <span>Categories</span>
+            {Array.isArray(categoriesList) && categoriesList.length > 0 && (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  background: "rgba(255, 255, 255, 0.16)",
+                  borderRadius: "10px",
+                  padding: "1px 7px",
+                  fontSize: "0.72rem",
+                  fontWeight: 600
+                }}
+              >
+                {categoriesList.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            className={`vap-nav-item ${activeNav === "tags" ? "active" : ""}`}
+            onClick={() => setActiveNav("tags")}
+          >
+            <Tag size={18} />
+            <span>Tags</span>
+            {Array.isArray(tagsList) && tagsList.length > 0 && (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  background: "rgba(255, 255, 255, 0.16)",
+                  borderRadius: "10px",
+                  padding: "1px 7px",
+                  fontSize: "0.72rem",
+                  fontWeight: 600
+                }}
+              >
+                {tagsList.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            className={`vap-nav-item ${activeNav === "export" ? "active" : ""}`}
+            onClick={() => {
+              setActiveNav("export");
+              loadAllVideosForExport();
+            }}
+          >
+            <FileSpreadsheet size={18} />
+            <span>Export Data</span>
           </button>
         </nav>
 
@@ -1523,8 +1859,17 @@ export default function AdminPanel({
               ======================================================== */}
           {activeNav === "dashboard" && (
             <div>
-              <div className="vap-page-header">
+              <div className="vap-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <h2 className="vap-page-title">Dashboard</h2>
+                <button
+                  className="vap-btn-outline danger"
+                  onClick={handleClearDummyData}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.85rem", padding: "6px 12px" }}
+                  title="Remove old test and dummy videos from database"
+                >
+                  <Trash2 size={15} />
+                  <span>Clear Old Dummy Data</span>
+                </button>
               </div>
 
               {/* Summary Stats Row */}
@@ -1535,7 +1880,7 @@ export default function AdminPanel({
                   </div>
                   <div className="vap-stat-meta">
                     <span className="vap-stat-label">Total Videos</span>
-                    <span className="vap-stat-value">{stats.totalVideos.toLocaleString()}</span>
+                    <span className="vap-stat-value">{Number(stats?.totalVideos || 0).toLocaleString()}</span>
                   </div>
                 </div>
 
@@ -1545,7 +1890,7 @@ export default function AdminPanel({
                   </div>
                   <div className="vap-stat-meta">
                     <span className="vap-stat-label">Total Views</span>
-                    <span className="vap-stat-value">{stats.totalViews.toLocaleString()}</span>
+                    <span className="vap-stat-value">{Number(stats?.totalViews || 0).toLocaleString()}</span>
                   </div>
                 </div>
 
@@ -1555,7 +1900,17 @@ export default function AdminPanel({
                   </div>
                   <div className="vap-stat-meta">
                     <span className="vap-stat-label">Total Categories</span>
-                    <span className="vap-stat-value">{stats.totalCategories.toLocaleString()}</span>
+                    <span className="vap-stat-value">{Number(stats?.totalCategories || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="vap-stat-card">
+                  <div className="vap-stat-icon orange">
+                    <Tag size={22} />
+                  </div>
+                  <div className="vap-stat-meta">
+                    <span className="vap-stat-label">Total Tags</span>
+                    <span className="vap-stat-value">{Number(stats?.totalTags || tagsList?.length || 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -1637,7 +1992,10 @@ export default function AdminPanel({
                   <button
                     type="button"
                     className="vap-btn-secondary"
-                    onClick={() => setShowExportModal(true)}
+                    onClick={() => {
+                      setActiveNav("export");
+                      loadAllVideosForExport();
+                    }}
                     style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
                     title="Export videos to Excel (.xlsx)"
                   >
@@ -1903,1034 +2261,710 @@ export default function AdminPanel({
           )}
 
           {/* ========================================================
-              SCREEN 3: UPLOAD VIDEO (4 Tabs)
+              SCREEN 3: UPLOAD VIDEO (Unified New Layout)
               ======================================================== */}
           {activeNav === "upload" && (
             <div>
-              {/* Four Tabs in exact required order */}
-              <div className="vap-upload-tabs">
-                <button
-                  type="button"
-                  className={`vap-upload-tab ${uploadTab === "single" ? "active" : ""}`}
-                  onClick={() => setUploadTab("single")}
-                >
-                  <UploadCloud size={17} />
-                  <span>Single Upload</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`vap-upload-tab ${uploadTab === "bulk" ? "active" : ""}`}
-                  onClick={() => setUploadTab("bulk")}
-                >
-                  <Layers size={17} />
-                  <span>Bulk Upload</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`vap-upload-tab ${uploadTab === "link" ? "active" : ""}`}
-                  onClick={() => setUploadTab("link")}
-                >
-                  <LinkIcon size={17} />
-                  <span>Upload via Link</span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`vap-upload-tab ${uploadTab === "excel" ? "active" : ""}`}
-                  onClick={() => setUploadTab("excel")}
-                >
-                  <FileSpreadsheet size={17} />
-                  <span>Upload from Excel</span>
-                </button>
-              </div>
-
-              {/* TAB 1: SINGLE UPLOAD */}
-              {uploadTab === "single" && (
-                <div className="vap-card">
-                  <form onSubmit={handleSingleUploadSubmit}>
-                    <div className="vap-two-col-layout">
-                      {/* Left Column: Video file / Video Link & Thumbnail */}
-                      <div>
-                        {/* Source Type Toggle */}
-                        <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-                          <button
-                            type="button"
-                            className={`vap-btn-${singleSourceType === "file" ? "primary" : "secondary"}`}
-                            style={{ flex: 1, justifyContent: "center", fontSize: "0.83rem", padding: "8px 10px" }}
-                            onClick={() => setSingleSourceType("file")}
-                          >
-                            <UploadCloud size={16} />
-                            <span>Upload File (Server Storage)</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`vap-btn-${singleSourceType === "link" ? "primary" : "secondary"}`}
-                            style={{ flex: 1, justifyContent: "center", fontSize: "0.83rem", padding: "8px 10px" }}
-                            onClick={() => setSingleSourceType("link")}
-                          >
-                            <LinkIcon size={16} />
-                            <span>Direct Video Link (No Duplicate)</span>
-                          </button>
-                        </div>
-
-                        {singleSourceType === "file" ? (
-                          <div className="vap-form-group">
-                            <label>Video File (from local device) <span className="required">*</span></label>
-                            <input
-                              type="file"
-                              ref={singleVideoInputRef}
-                              accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
-                              style={{ display: "none" }}
-                              onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
-                            />
-
-                            <div
-                              className="vap-dropzone"
-                              onClick={() => singleVideoInputRef.current?.click()}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                if (e.dataTransfer.files?.[0]) {
-                                  handleSingleFileSelect(e.dataTransfer.files[0]);
-                                }
-                              }}
-                            >
-                              <div className="vap-dropzone-icon">
-                                <UploadCloud size={28} />
-                              </div>
-                              <div className="vap-dropzone-prompt">
-                                {singleFile ? singleFile.name : "Drag & drop video file here"}
-                              </div>
-                              <span className="vap-dropzone-sub">or</span>
-                              <button
-                                type="button"
-                                className="vap-btn-primary"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  singleVideoInputRef.current?.click();
-                                }}
-                              >
-                                Choose File
-                              </button>
-                              <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>
-                                Supported formats: MP4, MOV, AVI, MKV, WEBM (Max: 2 GB)
-                              </span>
-                              {singleFile && (
-                                <span style={{ color: "#16a34a", fontSize: "0.85rem", fontWeight: 600 }}>
-                                  ✓ Selected: {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {singleDuration ? `| Duration: ${singleDuration}` : ""}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="vap-form-group">
-                            <label>Direct Video URL (CDN / MP4 / Stream / YouTube) <span className="required">*</span></label>
-                            <input
-                              type="url"
-                              className="vap-input"
-                              placeholder="https://cdn.example.com/video.mp4 or YouTube link"
-                              value={singleVideoUrl}
-                              onChange={(e) => handleSingleVideoUrlChange(e.target.value)}
-                            />
-                            <span style={{ fontSize: "0.8rem", color: "#2563eb", marginTop: "5px", display: "block" }}>
-                              ⚡ Video will stream directly via this link. No duplicate file will be uploaded to your server storage.
-                            </span>
-                            {singleDuration && (
-                              <span style={{ color: "#16a34a", fontSize: "0.82rem", fontWeight: 600, display: "block", marginTop: "4px" }}>
-                                ✓ Auto-detected video duration: {singleDuration}
-                              </span>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Thumbnail picker & Link */}
-                        <div className="vap-form-group">
-                          <label>Thumbnail (Auto-detected, Upload File, or Image URL)</label>
-                          <input
-                            type="file"
-                            ref={singleThumbInputRef}
-                            accept="image/jpeg,image/png,image/webp"
-                            style={{ display: "none" }}
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                setSingleThumbnailFile(file);
-                                setSingleThumbnail(URL.createObjectURL(file));
-                              }
-                            }}
-                          />
-
-                          <div style={{ display: "flex", gap: "14px", alignItems: "flex-start", flexWrap: "wrap" }}>
-                            <div
-                              style={{
-                                width: "130px",
-                                height: "76px",
-                                borderRadius: "8px",
-                                background: "#f1f5f9",
-                                border: "1px solid #cbd5e1",
-                                overflow: "hidden",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                flexShrink: 0
-                              }}
-                            >
-                              {(singleThumbnailUrl || singleThumbnail) ? (
-                                <img
-                                  src={singleThumbnailUrl || singleThumbnail}
-                                  alt="Thumbnail preview"
-                                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                                />
-                              ) : (
-                                <Film size={24} color="#94a3b8" />
-                              )}
-                            </div>
-
-                            <div style={{ flex: 1, minWidth: "200px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                              <div style={{ display: "flex", gap: "8px" }}>
-                                <button
-                                  type="button"
-                                  className="vap-btn-secondary"
-                                  style={{ fontSize: "0.82rem", padding: "6px 12px" }}
-                                  onClick={() => singleThumbInputRef.current?.click()}
-                                >
-                                  Choose File
-                                </button>
-                                {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
-                                  <button
-                                    type="button"
-                                    className="vap-btn-secondary"
-                                    style={{ fontSize: "0.82rem", color: "#dc2626", padding: "6px 10px" }}
-                                    onClick={() => {
-                                      setSingleThumbnail("");
-                                      setSingleThumbnailFile(null);
-                                      setSingleThumbnailUrl("");
-                                    }}
-                                  >
-                                    Clear
-                                  </button>
-                                )}
-                              </div>
-                              <input
-                                type="url"
-                                className="vap-input"
-                                style={{ fontSize: "0.85rem", padding: "6px 10px" }}
-                                placeholder="Or enter custom Thumbnail URL"
-                                value={singleThumbnailUrl}
-                                onChange={(e) => setSingleThumbnailUrl(e.target.value)}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right Column: Title, Description, Category, Tags, Privacy */}
-                      <div>
-                        <div className="vap-form-group">
-                          <label>Title <span className="required">*</span></label>
-                          <input
-                            type="text"
-                            className="vap-input"
-                            placeholder="Enter video title"
-                            value={singleTitle}
-                            onChange={(e) => setSingleTitle(e.target.value)}
-                            required
-                          />
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Description</label>
-                          <textarea
-                            className="vap-textarea"
-                            placeholder="Write a short description..."
-                            value={singleDescription}
-                            onChange={(e) => setSingleDescription(e.target.value)}
-                          />
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Category <span className="required">*</span></label>
-                          <select
-                            className="vap-form-select"
-                            value={singleCategory}
-                            onChange={(e) => setSingleCategory(e.target.value)}
-                          >
-                            {categoriesList.map((c) => (
-                              <option key={c.id || c.name} value={c.name}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Tags (press Enter to add)</label>
-                          <div className="vap-tags-wrap">
-                            {singleTags.map((tag, idx) => (
-                              <span key={idx} className="vap-tag-item">
-                                {tag}
-                                <button
-                                  type="button"
-                                  className="vap-tag-remove"
-                                  onClick={() => handleRemoveSingleTag(idx)}
-                                >
-                                  <X size={12} />
-                                </button>
-                              </span>
-                            ))}
-                            <input
-                              type="text"
-                              className="vap-tag-input"
-                              placeholder="Add tag and press Enter"
-                              value={singleTagInput}
-                              onChange={(e) => setSingleTagInput(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === ",") {
-                                  e.preventDefault();
-                                  handleAddSingleTag();
-                                }
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Duration & Engagement */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
-                          <div className="vap-form-group">
-                            <label>Duration (MM:SS)</label>
-                            <input
-                              type="text"
-                              className="vap-input"
-                              value={singleDuration}
-                              onChange={(e) => setSingleDuration(e.target.value)}
-                              placeholder="Auto or MM:SS"
-                            />
-                          </div>
-                          <div className="vap-form-group">
-                            <label>Initial Views</label>
-                            <input
-                              type="number"
-                              className="vap-input"
-                              placeholder="0"
-                              value={singleInitialViews}
-                              onChange={(e) => setSingleInitialViews(e.target.value)}
-                            />
-                          </div>
-                          <div className="vap-form-group">
-                            <label>Initial Likes</label>
-                            <input
-                              type="number"
-                              className="vap-input"
-                              placeholder="0"
-                              value={singleInitialLikes}
-                              onChange={(e) => setSingleInitialLikes(e.target.value)}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Privacy Selection */}
-                        <div className="vap-form-group">
-                          <label>Privacy <span className="required">*</span></label>
-                          <select
-                            className="vap-form-select"
-                            value={singlePrivacy}
-                            onChange={(e) => setSinglePrivacy(e.target.value)}
-                          >
-                            <option value="public">Public (Visible to all permitted website visitors)</option>
-                            <option value="private">Private (Only visible to authorized admin)</option>
-                          </select>
-                        </div>
-
-                        {/* Live Upload Progress Feedback */}
-                        {isUploadingSingle && (
-                          <div style={{ marginTop: "18px", padding: "14px 16px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                              <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
-                                <Loader2 className="animate-spin" size={15} color="#2563eb" />
-                                {singleUploadStep || "Uploading & processing..."}
-                              </span>
-                              <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#2563eb" }}>
-                                {singleUploadProgress}%
-                              </span>
-                            </div>
-                            <div style={{ width: "100%", height: "8px", background: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
-                              <div
-                                style={{
-                                  width: `${singleUploadProgress}%`,
-                                  height: "100%",
-                                  background: singleUploadProgress === 100 ? "#16a34a" : "linear-gradient(90deg, #2563eb, #3b82f6)",
-                                  transition: "width 0.25s ease-in-out"
-                                }}
-                              />
-                            </div>
-                            <span style={{ fontSize: "0.78rem", color: "#64748b", marginTop: "6px", display: "block" }}>
-                              Job saved in Upload History. You can check status anytime from the history menu.
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Upload Success Card */}
-                        {singleUploadSuccessVideo && (
-                          <div style={{ marginTop: "18px", padding: "16px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "8px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#15803d", fontWeight: 700, fontSize: "0.95rem" }}>
-                              <CheckCircle2 size={20} color="#16a34a" />
-                              <span>Video Published Live Successfully!</span>
-                            </div>
-                            <p style={{ margin: "6px 0 14px", fontSize: "0.85rem", color: "#374151" }}>
-                              <strong>{singleUploadSuccessVideo.title}</strong> has been saved to your Cloudflare D1 database and is available for streaming.
-                            </p>
-                            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                              <button
-                                type="button"
-                                className="vap-btn-primary"
-                                style={{ padding: "8px 14px", fontSize: "0.83rem" }}
-                                onClick={() => {
-                                  if (onViewVideo) onViewVideo(singleUploadSuccessVideo);
-                                  else window.open(`/?v=${singleUploadSuccessVideo.id}`, "_blank");
-                                }}
-                              >
-                                <Play size={14} />
-                                <span>Watch Video Live</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="vap-btn-secondary"
-                                style={{ padding: "8px 14px", fontSize: "0.83rem" }}
-                                onClick={() => setActiveNav("history")}
-                              >
-                                <History size={14} />
-                                <span>View Upload History</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="vap-btn-secondary"
-                                style={{ padding: "8px 14px", fontSize: "0.83rem" }}
-                                onClick={() => setSingleUploadSuccessVideo(null)}
-                              >
-                                Upload Another
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Upload Error Alert */}
-                        {singleUploadError && (
-                          <div style={{ marginTop: "18px", padding: "14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#991b1b", fontWeight: 700, fontSize: "0.9rem" }}>
-                              <AlertCircle size={18} color="#dc2626" />
-                              <span>Upload or Publish Error</span>
-                            </div>
-                            <p style={{ margin: "6px 0 0", fontSize: "0.83rem", color: "#b91c1c" }}>
-                              {singleUploadError}
-                            </p>
-                          </div>
-                        )}
-
-                        <div style={{ marginTop: "20px" }}>
-                          <button
-                            type="submit"
-                            className="vap-btn-primary"
-                            style={{
-                              width: "100%",
-                              justifyContent: "center",
-                              padding: "12px",
-                              opacity: isUploadingSingle ? 0.75 : 1,
-                              cursor: isUploadingSingle ? "not-allowed" : "pointer",
-                              background: isUploadingSingle ? "#475569" : undefined
-                            }}
-                            disabled={isUploadingSingle}
-                          >
-                            {isUploadingSingle ? (
-                              <>
-                                <Loader2 className="animate-spin" size={18} />
-                                <span>Uploading in progress, please wait...</span>
-                              </>
-                            ) : (
-                              <span>Upload & Publish Video</span>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-              )}
-
-              {/* TAB 2: BULK UPLOAD */}
-              {uploadTab === "bulk" && (
-                <div className="vap-card">
-                  <div className="vap-form-group">
-                    <label>Select Multiple Local Video Files</label>
-                    <input
-                      type="file"
-                      ref={bulkVideoInputRef}
-                      multiple
-                      accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
-                      style={{ display: "none" }}
-                      onChange={(e) => handleBulkFilesSelect(e.target.files)}
-                    />
-
-                    <div
-                      className="vap-dropzone"
-                      onClick={() => bulkVideoInputRef.current?.click()}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        if (e.dataTransfer.files) {
-                          handleBulkFilesSelect(e.dataTransfer.files);
-                        }
-                      }}
-                    >
-                      <div className="vap-dropzone-icon">
-                        <Layers size={28} />
-                      </div>
-                      <div className="vap-dropzone-prompt">Drag & drop multiple videos here</div>
-                      <span className="vap-dropzone-sub">or</span>
-                      <button
-                        type="button"
-                        className="vap-btn-primary"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          bulkVideoInputRef.current?.click();
-                        }}
-                      >
-                        Choose Multiple Files
-                      </button>
-                    </div>
-                  </div>
-
-                  {bulkFiles.length > 0 && (
-                    <div style={{ marginTop: "24px" }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          marginBottom: "16px",
-                          flexWrap: "wrap",
-                          gap: "12px"
-                        }}
-                      >
-                        <h4>Selected Videos ({bulkFiles.length})</h4>
-                        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                          <select
-                            className="vap-select"
-                            value={bulkDefaultCategory}
-                            onChange={(e) => {
-                              const cat = e.target.value;
-                              setBulkDefaultCategory(cat);
-                              setBulkFiles((prev) => prev.map((f) => ({ ...f, category: cat })));
-                            }}
-                          >
-                            {categoriesList.map((c) => (
-                              <option key={c.id || c.name} value={c.name}>
-                                Apply Category: {c.name}
-                              </option>
-                            ))}
-                          </select>
-
-                          <select
-                            className="vap-select"
-                            value={bulkDefaultPrivacy}
-                            onChange={(e) => {
-                              const priv = e.target.value;
-                              setBulkDefaultPrivacy(priv);
-                              setBulkFiles((prev) => prev.map((f) => ({ ...f, privacy: priv })));
-                            }}
-                          >
-                            <option value="public">Apply Privacy: Public</option>
-                            <option value="private">Apply Privacy: Private</option>
-                          </select>
-
-                          <button
-                            type="button"
-                            className="vap-btn-secondary"
-                            onClick={() => setBulkFiles([])}
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Bulk Progress Bar */}
-                      {isUploadingBulk && (
-                        <div style={{ marginBottom: "16px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", marginBottom: "4px" }}>
-                            <span>Overall Progress</span>
-                            <span>{bulkOverallProgress}%</span>
-                          </div>
-                          <div style={{ width: "100%", height: "8px", background: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
-                            <div style={{ width: `${bulkOverallProgress}%`, height: "100%", background: "#2563eb", transition: "width 0.3s" }} />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Items table */}
-                      <div className="vap-table-container">
-                        <table className="vap-table">
-                          <thead>
-                            <tr>
-                              <th>Thumbnail</th>
-                              <th>Title</th>
-                              <th>Category</th>
-                              <th>Duration</th>
-                              <th>Privacy</th>
-                              <th>Status</th>
-                              <th>Action</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {bulkFiles.map((item, idx) => (
-                              <tr key={item.id}>
-                                <td>
-                                  <div className="vap-thumb-cell">
-                                    {item.thumbnail ? (
-                                      <img src={item.thumbnail} alt={item.title} />
-                                    ) : (
-                                      <Film size={20} color="#94a3b8" />
-                                    )}
-                                  </div>
-                                </td>
-                                <td>
-                                  <input
-                                    type="text"
-                                    className="vap-input"
-                                    value={item.title}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setBulkFiles((prev) =>
-                                        prev.map((it) => (it.id === item.id ? { ...it, title: val } : it))
-                                      );
-                                    }}
-                                  />
-                                </td>
-                                <td>
-                                  <select
-                                    className="vap-select"
-                                    value={item.category}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setBulkFiles((prev) =>
-                                        prev.map((it) => (it.id === item.id ? { ...it, category: val } : it))
-                                      );
-                                    }}
-                                  >
-                                    {categoriesList.map((c) => (
-                                      <option key={c.id || c.name} value={c.name}>
-                                        {c.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td>{item.duration}</td>
-                                <td>
-                                  <select
-                                    className="vap-select"
-                                    value={item.privacy}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setBulkFiles((prev) =>
-                                        prev.map((it) => (it.id === item.id ? { ...it, privacy: val } : it))
-                                      );
-                                    }}
-                                  >
-                                    <option value="public">Public</option>
-                                    <option value="private">Private</option>
-                                  </select>
-                                </td>
-                                <td>
-                                  {item.status === "pending" && (
-                                    <span style={{ color: "#64748b", fontSize: "0.85rem" }}>Pending</span>
-                                  )}
-                                  {item.status === "uploading" && (
-                                    <span style={{ color: "#2563eb", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "4px" }}>
-                                      <Loader2 className="animate-spin" size={14} /> {item.progress}%
-                                    </span>
-                                  )}
-                                  {item.status === "success" && (
-                                    <span style={{ color: "#16a34a", fontSize: "0.85rem", fontWeight: 600 }}>✓ Done</span>
-                                  )}
-                                  {item.status === "error" && (
-                                    <span style={{ color: "#dc2626", fontSize: "0.85rem" }}>{item.error || "Failed"}</span>
-                                  )}
-                                </td>
-                                <td>
-                                  <button
-                                    type="button"
-                                    className="vap-icon-btn danger"
-                                    onClick={() => setBulkFiles(bulkFiles.filter((_, i) => i !== idx))}
-                                  >
-                                    <X size={14} />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      <div style={{ marginTop: "20px", display: "flex", justifyContent: "flex-end" }}>
-                        <button
-                          type="button"
-                          className="vap-btn-primary"
-                          disabled={isUploadingBulk || bulkFiles.length === 0}
-                          onClick={handleBulkUploadAll}
-                        >
-                          {isUploadingBulk ? "Uploading all videos..." : `Upload All (${bulkFiles.length}) Videos`}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* TAB 3: UPLOAD VIA LINK */}
-              {uploadTab === "link" && (
-                <div className="vap-card">
-                  <form onSubmit={handleLinkImportSubmit}>
-                    <div className="vap-two-col-layout">
-                      <div>
-                        <div className="vap-form-group">
-                          <label>Video URL (YouTube, Vimeo, CDN, Direct MP4) <span className="required">*</span></label>
-                          <input
-                            type="url"
-                            className="vap-input"
-                            placeholder="https://www.youtube.com/watch?v=... or direct MP4 URL"
-                            value={linkUrl}
-                            onChange={(e) => handleLinkUrlChange(e.target.value)}
-                            required
-                          />
-                          <span style={{ fontSize: "0.8rem", color: "#2563eb", marginTop: "4px" }}>
-                            💡 YouTube URLs automatically extract high-resolution thumbnail and video embed!
-                          </span>
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Thumbnail URL (auto-fetched or custom)</label>
-                          <input
-                            type="text"
-                            className="vap-input"
-                            placeholder="Thumbnail image URL"
-                            value={linkThumbnail}
-                            onChange={(e) => setLinkThumbnail(e.target.value)}
-                          />
-
-                          {linkThumbnail && (
-                            <div
-                              style={{
-                                width: "100%",
-                                maxHeight: "180px",
-                                borderRadius: "8px",
-                                overflow: "hidden",
-                                marginTop: "8px",
-                                border: "1px solid #cbd5e1"
-                              }}
-                            >
-                              <img
-                                src={linkThumbnail}
-                                alt="Preview"
-                                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="vap-form-group">
-                          <label>Title <span className="required">*</span></label>
-                          <input
-                            type="text"
-                            className="vap-input"
-                            placeholder="Enter video title"
-                            value={linkTitle}
-                            onChange={(e) => setLinkTitle(e.target.value)}
-                            required
-                          />
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Description</label>
-                          <textarea
-                            className="vap-textarea"
-                            placeholder="Write video overview..."
-                            value={linkDescription}
-                            onChange={(e) => setLinkDescription(e.target.value)}
-                          />
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Category <span className="required">*</span></label>
-                          <select
-                            className="vap-form-select"
-                            value={linkCategory}
-                            onChange={(e) => setLinkCategory(e.target.value)}
-                          >
-                            {categoriesList.map((c) => (
-                              <option key={c.id || c.name} value={c.name}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Tags (press Enter to add)</label>
-                          <div className="vap-tags-wrap">
-                            {linkTags.map((tag, idx) => (
-                              <span key={idx} className="vap-tag-item">
-                                {tag}
-                                <button
-                                  type="button"
-                                  className="vap-tag-remove"
-                                  onClick={() => setLinkTags(linkTags.filter((_, i) => i !== idx))}
-                                >
-                                  <X size={12} />
-                                </button>
-                              </span>
-                            ))}
-                            <input
-                              type="text"
-                              className="vap-tag-input"
-                              placeholder="Add tag and press Enter"
-                              value={linkTagInput}
-                              onChange={(e) => setLinkTagInput(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === ",") {
-                                  e.preventDefault();
-                                  handleAddLinkTag();
-                                }
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
-                          <div className="vap-form-group">
-                            <label>Duration</label>
-                            <input
-                              type="text"
-                              className="vap-input"
-                              placeholder="Auto or MM:SS"
-                              value={linkDuration}
-                              onChange={(e) => setLinkDuration(e.target.value)}
-                            />
-                          </div>
-                          <div className="vap-form-group">
-                            <label>Initial Views</label>
-                            <input
-                              type="number"
-                              className="vap-input"
-                              placeholder="0"
-                              value={linkInitialViews}
-                              onChange={(e) => setLinkInitialViews(e.target.value)}
-                            />
-                          </div>
-                          <div className="vap-form-group">
-                            <label>Initial Likes</label>
-                            <input
-                              type="number"
-                              className="vap-input"
-                              placeholder="0"
-                              value={linkInitialLikes}
-                              onChange={(e) => setLinkInitialLikes(e.target.value)}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="vap-form-group">
-                          <label>Privacy <span className="required">*</span></label>
-                          <select
-                            className="vap-form-select"
-                            value={linkPrivacy}
-                            onChange={(e) => setLinkPrivacy(e.target.value)}
-                          >
-                            <option value="public">Public</option>
-                            <option value="private">Private</option>
-                          </select>
-                        </div>
-
-                        <div style={{ marginTop: "20px" }}>
-                          <button
-                            type="submit"
-                            className="vap-btn-primary"
-                            style={{ width: "100%", justifyContent: "center", padding: "12px" }}
-                            disabled={isImportingLink}
-                          >
-                            {isImportingLink ? "Importing Video..." : "Import Video via Link"}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-              )}
-
-              {/* TAB 4: UPLOAD FROM EXCEL */}
-              {uploadTab === "excel" && (
-                <div className="vap-card">
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: "20px",
-                      flexWrap: "wrap",
-                      gap: "12px"
-                    }}
-                  >
-                    <div>
-                      <h4 style={{ margin: 0, fontSize: "1.1rem" }}>Bulk Metadata Import via Excel</h4>
-                      <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.85rem" }}>
-                        Upload video entries from .xlsx, .xls, or .csv files with complete column validation.
-                      </p>
-                    </div>
-
-                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        className="vap-btn-primary"
-                        onClick={() => setShowExportModal(true)}
-                        style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}
-                        title="Export current videos to Excel (.xlsx)"
-                      >
-                        <FileSpreadsheet size={16} />
-                        <span>Export Videos to Excel</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className="vap-btn-secondary"
-                        onClick={handleDownloadExcelTemplate}
-                      >
-                        <Download size={16} />
-                        <span>Download Sample Template</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <input
-                    type="file"
-                    ref={excelInputRef}
-                    accept=".xlsx,.xls,.csv"
-                    style={{ display: "none" }}
-                    onChange={(e) => handleExcelFileSelect(e.target.files?.[0])}
-                  />
-
-                  <div
-                    className="vap-dropzone"
-                    onClick={() => excelInputRef.current?.click()}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (e.dataTransfer.files?.[0]) {
-                        handleExcelFileSelect(e.dataTransfer.files[0]);
-                      }
-                    }}
-                  >
-                    <div className="vap-dropzone-icon">
-                      <FileSpreadsheet size={28} />
-                    </div>
-                    <div className="vap-dropzone-prompt">
-                      {excelFile ? excelFile.name : "Drag & drop your Excel file (.xlsx / .csv)"}
-                    </div>
-                    <span className="vap-dropzone-sub">or</span>
+              {/* ── Publish header bar ── */}
+              <div className="vap-publish-header">
+                <h2 className="vap-page-title" style={{ margin: 0 }}>Upload Video</h2>
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  {singleSourceType === "excel" ? (
                     <button
                       type="button"
                       className="vap-btn-primary"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        excelInputRef.current?.click();
-                      }}
+                      disabled={isImportingExcel || excelParsedRows.filter((r) => r.isValid).length === 0}
+                      onClick={handleImportExcelVideos}
+                      style={{ padding: "10px 22px", fontSize: "0.95rem" }}
                     >
-                      Choose Excel File
+                      {isImportingExcel
+                        ? `Importing... (${excelProgress}%)`
+                        : `📤 Import ${excelParsedRows.filter((r) => r.isValid).length} Videos`}
                     </button>
-                  </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="vap-btn-primary"
+                      style={{
+                        padding: "10px 22px",
+                        fontSize: "0.95rem",
+                        opacity: isUploadingSingle ? 0.75 : 1,
+                        cursor: isUploadingSingle ? "not-allowed" : "pointer"
+                      }}
+                      disabled={isUploadingSingle || isFetchingMeta}
+                      onClick={handleSingleUploadSubmit}
+                    >
+                      {isUploadingSingle ? (
+                        <><Loader2 className="animate-spin" size={16} /> Uploading...</>
+                      ) : (
+                        <><UploadCloud size={16} /> Publish Video</>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
 
-                  {/* Excel parsed rows and row-level validation */}
-                  {excelParsedRows.length > 0 && (
-                    <div style={{ marginTop: "24px" }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          marginBottom: "12px",
-                          flexWrap: "wrap",
-                          gap: "10px"
-                        }}
+              {/* ── Main two-column card ── */}
+              <div className="vap-card" style={{ marginTop: "16px" }}>
+                <div className="vap-two-col-layout">
+
+                  {/* ════ LEFT COLUMN ════ */}
+                  <div>
+                    {/* 3 Source Type Buttons */}
+                    <div className="vap-upload-source-btns">
+                      <button
+                        type="button"
+                        className={`vap-src-btn ${singleSourceType === "file" ? "active" : ""}`}
+                        onClick={() => setSingleSourceType("file")}
                       >
-                        <div>
-                          <strong>{excelParsedRows.length} Rows Parsed: </strong>
-                          <span style={{ color: "#16a34a", fontWeight: 600, marginLeft: "6px" }}>
-                            {excelParsedRows.filter((r) => r.isValid).length} Valid
+                        <UploadCloud size={16} />
+                        <span>Local (Server)</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`vap-src-btn ${singleSourceType === "link" ? "active" : ""}`}
+                        onClick={() => setSingleSourceType("link")}
+                      >
+                        <LinkIcon size={16} />
+                        <span>Via Link</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`vap-src-btn ${singleSourceType === "excel" ? "active" : ""}`}
+                        onClick={() => setSingleSourceType("excel")}
+                      >
+                        <FileSpreadsheet size={16} />
+                        <span>Excel Import</span>
+                      </button>
+                    </div>
+
+                    {/* Save in Server Toggle Banner (Applies across all modes: Local, Link, Excel) */}
+                    <div
+                      className={`vap-save-server-banner ${saveToServer ? "active" : ""}`}
+                      onClick={() => setSaveToServer(!saveToServer)}
+                      style={{ cursor: "pointer", userSelect: "none", marginBottom: "16px" }}
+                      title="Click to toggle whether video & thumbnail are saved in server storage"
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <div className={`vap-save-icon ${saveToServer ? "active" : ""}`}>
+                            <Server size={18} />
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "#1e293b" }}>
+                              Save in Server Storage: {saveToServer ? <span style={{ color: "#16a34a" }}>ON</span> : <span style={{ color: "#64748b" }}>OFF</span>}
+                            </div>
+                            <div style={{ fontSize: "0.76rem", color: "#64748b" }}>
+                              {saveToServer
+                                ? "Videos & thumbnails will be downloaded and saved directly into server storage (R2 / local uploads)"
+                                : "External streaming link only (no file saved to server storage, saves disk space)"}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className={`vap-toggle-pill ${saveToServer ? "enabled" : "disabled"}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSaveToServer(!saveToServer);
+                          }}
+                        >
+                          <div className="vap-toggle-dot" />
+                          <span>{saveToServer ? "SAVING ON" : "SAVING OFF"}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* ── LOCAL FILE ── */}
+                    {singleSourceType === "file" && (
+                      <div className="vap-form-group">
+                        <input
+                          type="file"
+                          ref={singleVideoInputRef}
+                          accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,video/*"
+                          style={{ display: "none" }}
+                          onChange={(e) => handleSingleFileSelect(e.target.files?.[0])}
+                        />
+                        <div
+                          className="vap-dropzone"
+                          onClick={() => singleVideoInputRef.current?.click()}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (e.dataTransfer.files?.[0]) handleSingleFileSelect(e.dataTransfer.files[0]);
+                          }}
+                        >
+                          <div className="vap-dropzone-icon"><UploadCloud size={28} /></div>
+                          <div className="vap-dropzone-prompt">
+                            {singleFile ? singleFile.name : "Drag & drop video file here"}
+                          </div>
+                          <span className="vap-dropzone-sub">or</span>
+                          <button
+                            type="button"
+                            className="vap-btn-primary"
+                            onClick={(e) => { e.stopPropagation(); singleVideoInputRef.current?.click(); }}
+                          >
+                            Choose File
+                          </button>
+                          <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>
+                            MP4, MOV, AVI, MKV, WEBM (Max: 2 GB)
                           </span>
-                          {excelValidationErrors.length > 0 && (
-                            <span style={{ color: "#dc2626", fontWeight: 600, marginLeft: "12px" }}>
-                              {excelValidationErrors.length} Errors Found
-                            </span>
+                          {singleFile && (
+                            <div style={{ marginTop: "10px", display: "flex", alignItems: "center", gap: "10px", justifyContent: "center" }}>
+                              <span style={{ color: "#16a34a", fontSize: "0.85rem", fontWeight: 600 }}>
+                                ✓ {(singleFile.size / (1024 * 1024)).toFixed(1)} MB {singleDuration ? `| ${singleDuration}` : ""}
+                              </span>
+                              <button
+                                type="button"
+                                className="vap-btn-secondary"
+                                style={{ fontSize: "0.78rem", padding: "4px 8px", color: "#dc2626" }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSingleFile(null);
+                                  if (singleVideoInputRef.current) singleVideoInputRef.current.value = "";
+                                }}
+                              >
+                                <Trash2 size={12} /> Remove
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── VIA LINK ── */}
+                    {singleSourceType === "link" && (
+                      <div className="vap-form-group">
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.88rem" }}>
+                            Video URL <span className="required">*</span>
+                          </label>
+                          {singleVideoUrl && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSingleVideoUrl("");
+                                setLinkUrl("");
+                              }}
+                              style={{ background: "none", border: "none", color: "#dc2626", fontSize: "0.78rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              <X size={13} /> Clear
+                            </button>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <input
+                            type="url"
+                            className="vap-input"
+                            placeholder="Paste YouTube, Vimeo, Instagram, or direct MP4/M3U8 link..."
+                            value={singleVideoUrl}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSingleVideoUrl(val);
+                              setLinkUrl(val);
+                            }}
+                            onPaste={(e) => {
+                              const pasted = e.clipboardData.getData("text");
+                              if (pasted && (pasted.startsWith("http://") || pasted.startsWith("https://"))) {
+                                setTimeout(() => handleAutoFetchMetadata(pasted), 120);
+                              }
+                            }}
+                            style={{ flex: 1 }}
+                          />
+                          <button
+                            type="button"
+                            className="vap-fetch-btn"
+                            disabled={isFetchingMeta || !singleVideoUrl.trim()}
+                            onClick={() => handleAutoFetchMetadata(singleVideoUrl)}
+                            title="Auto-fetch video title, description, category, tags, and thumbnail from this link"
+                          >
+                            {isFetchingMeta ? (
+                              <><Loader2 className="animate-spin" size={14} /> Fetching...</>
+                            ) : (
+                              <><Zap size={14} /> Auto-Fetch</>
+                            )}
+                          </button>
+                        </div>
+                        <span style={{ fontSize: "0.78rem", color: "#2563eb", marginTop: "6px", display: "block" }}>
+                          ⚡ Paste any video link & click <strong>Auto-Fetch</strong>: Title, description, category, tags, duration & thumbnail auto-fill!
+                        </span>
+                      </div>
+                    )}
+
+                    {/* ── EXCEL ── */}
+                    {singleSourceType === "excel" && (
+                      <div className="vap-form-group">
+                        <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="vap-btn-secondary"
+                            onClick={handleDownloadExcelTemplate}
+                            style={{ fontSize: "0.82rem" }}
+                          >
+                            <Download size={14} /> Sample Template
+                          </button>
+                          <button
+                            type="button"
+                            className="vap-btn-secondary"
+                            onClick={() => setShowExportModal(true)}
+                            style={{ fontSize: "0.82rem" }}
+                          >
+                            <FileSpreadsheet size={14} /> Export Videos
+                          </button>
+                        </div>
+                        <input
+                          type="file"
+                          ref={excelInputRef}
+                          accept=".xlsx,.xls,.csv"
+                          style={{ display: "none" }}
+                          onChange={(e) => handleExcelFileSelect(e.target.files?.[0])}
+                        />
+                        <div
+                          className="vap-dropzone"
+                          onClick={() => excelInputRef.current?.click()}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (e.dataTransfer.files?.[0]) handleExcelFileSelect(e.dataTransfer.files[0]);
+                          }}
+                        >
+                          <div className="vap-dropzone-icon"><FileSpreadsheet size={28} /></div>
+                          <div className="vap-dropzone-prompt">
+                            {excelFile ? excelFile.name : "Drag & drop Excel / CSV file"}
+                          </div>
+                          <span className="vap-dropzone-sub">or</span>
+                          <button
+                            type="button"
+                            className="vap-btn-primary"
+                            onClick={(e) => { e.stopPropagation(); excelInputRef.current?.click(); }}
+                          >
+                            Choose Excel File
+                          </button>
+                          <span className="vap-dropzone-sub" style={{ marginTop: "6px" }}>.xlsx / .xls / .csv</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── THUMBNAIL (shown for file & link modes) ── */}
+                    {singleSourceType !== "excel" && (
+                      <div className="vap-form-group" style={{ marginTop: "18px" }}>
+                        <label style={{ fontWeight: 600, fontSize: "0.88rem", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                          <span>🖼️ Video Thumbnail</span>
+                          {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
+                            <span style={{ fontSize: "0.78rem", color: "#16a34a", fontWeight: 600 }}>✓ Thumbnail attached</span>
+                          )}
+                        </label>
+                        <input
+                          type="file"
+                          ref={singleThumbInputRef}
+                          accept="image/jpeg,image/png,image/webp"
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setSingleThumbnailFile(file);
+                              const obj = URL.createObjectURL(file);
+                              setSingleThumbnail(obj);
+                              setSingleThumbnailUrl(obj);
+                              setLinkThumbnail(obj);
+                            }
+                          }}
+                        />
+
+                        {/* 16:9 Preview box */}
+                        <div
+                          style={{
+                            width: "100%",
+                            aspectRatio: "16 / 9",
+                            maxHeight: "180px",
+                            borderRadius: "10px",
+                            background: "#0f172a",
+                            border: "2px dashed #334155",
+                            overflow: "hidden",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginBottom: "10px",
+                            cursor: "pointer"
+                          }}
+                          onClick={() => singleThumbInputRef.current?.click()}
+                          title="Click to choose a local thumbnail image"
+                        >
+                          {(singleThumbnailUrl || singleThumbnail) ? (
+                            <img
+                              src={singleThumbnailUrl || singleThumbnail}
+                              alt="Thumbnail preview"
+                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            />
+                          ) : (
+                            <div style={{ textAlign: "center", color: "#94a3b8" }}>
+                              <Film size={32} />
+                              <div style={{ fontSize: "0.78rem", marginTop: "6px" }}>Click to select thumbnail image</div>
+                            </div>
                           )}
                         </div>
 
+                        {/* Action buttons row */}
+                        <div style={{ display: "flex", gap: "8px", marginBottom: "8px", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="vap-btn-secondary"
+                            style={{ fontSize: "0.82rem", padding: "6px 12px" }}
+                            onClick={() => singleThumbInputRef.current?.click()}
+                          >
+                            📁 Local File
+                          </button>
+                          {(singleThumbnail || singleThumbnailUrl || singleThumbnailFile) && (
+                            <button
+                              type="button"
+                              className="vap-btn-secondary"
+                              style={{ fontSize: "0.82rem", padding: "6px 12px", color: "#dc2626", borderColor: "#fecaca" }}
+                              onClick={() => {
+                                setSingleThumbnail("");
+                                setSingleThumbnailFile(null);
+                                setSingleThumbnailUrl("");
+                                setLinkThumbnail("");
+                                if (singleThumbInputRef.current) singleThumbInputRef.current.value = "";
+                              }}
+                            >
+                              🗑️ Remove Thumbnail
+                            </button>
+                          )}
+                        </div>
+
+                        {/* URL input */}
+                        <input
+                          type="url"
+                          className="vap-input"
+                          style={{ fontSize: "0.85rem" }}
+                          placeholder="Or enter custom Thumbnail URL"
+                          value={singleThumbnailUrl}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSingleThumbnailUrl(val);
+                            setSingleThumbnail(val);
+                            setLinkThumbnail(val);
+                            setSingleThumbnailFile(null);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ════ RIGHT COLUMN (Unified State for File & Link) ════ */}
+                  <div>
+                    {/* Title */}
+                    <div className="vap-form-group">
+                      <label>Title <span className="required">*</span></label>
+                      <input
+                        type="text"
+                        className="vap-input"
+                        placeholder="Enter video title"
+                        value={singleTitle}
+                        onChange={(e) => {
+                          setSingleTitle(e.target.value);
+                          setLinkTitle(e.target.value);
+                        }}
+                        required
+                      />
+                    </div>
+
+                    {/* Description */}
+                    <div className="vap-form-group">
+                      <label>Description</label>
+                      <textarea
+                        className="vap-textarea"
+                        placeholder="Write a short description..."
+                        value={singleDescription}
+                        onChange={(e) => {
+                          setSingleDescription(e.target.value);
+                          setLinkDescription(e.target.value);
+                        }}
+                      />
+                    </div>
+
+                    {/* Category */}
+                    <div className="vap-form-group">
+                      <label>Category <span className="required">*</span></label>
+                      <select
+                        className="vap-form-select"
+                        value={singleCategory}
+                        onChange={(e) => {
+                          setSingleCategory(e.target.value);
+                          setLinkCategory(e.target.value);
+                        }}
+                      >
+                        {categoriesList.map((c) => (
+                          <option key={c.id || c.name} value={c.name}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Tags */}
+                    {singleSourceType !== "excel" && (
+                      <div className="vap-form-group">
+                        <label>Tags (press Enter to add)</label>
+                        <div className="vap-tags-wrap">
+                          {singleTags.map((tag, idx) => (
+                            <span key={idx} className="vap-tag-item">
+                              {tag}
+                              <button
+                                type="button"
+                                className="vap-tag-remove"
+                                onClick={() => handleRemoveSingleTag(idx)}
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          <input
+                            type="text"
+                            className="vap-tag-input"
+                            placeholder="Add tag and press Enter"
+                            value={singleTagInput}
+                            onChange={(e) => {
+                              setSingleTagInput(e.target.value);
+                              setLinkTagInput(e.target.value);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === ",") {
+                                e.preventDefault();
+                                handleAddSingleTag();
+                              }
+                            }}
+                          />
+                        </div>
+                        {tagsList.length > 0 && (
+                          <div className="vap-suggested-tags">
+                            <span className="vap-suggested-label">Available Tags:</span>
+                            <div className="vap-suggested-chips">
+                              {tagsList.map((t) => {
+                                const isSelected = singleTags.includes(t.name);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={t.id || t.name}
+                                    className={`vap-tag-chip ${isSelected ? "selected" : ""}`}
+                                    onClick={() => {
+                                      const updated = isSelected ? singleTags.filter((s) => s !== t.name) : [...singleTags, t.name];
+                                      setSingleTags(updated);
+                                      setLinkTags(updated);
+                                    }}
+                                  >
+                                    {isSelected ? "✓ " : "+ "}{t.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Duration / Views / Likes */}
+                    {singleSourceType !== "excel" && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
+                        <div className="vap-form-group">
+                          <label>Duration</label>
+                          <input
+                            type="text"
+                            className="vap-input"
+                            placeholder="MM:SS"
+                            value={singleDuration}
+                            onChange={(e) => {
+                              setSingleDuration(e.target.value);
+                              setLinkDuration(e.target.value);
+                            }}
+                          />
+                        </div>
+                        <div className="vap-form-group">
+                          <label>Views</label>
+                          <input
+                            type="number"
+                            className="vap-input"
+                            placeholder="0"
+                            value={singleInitialViews}
+                            onChange={(e) => {
+                              setSingleInitialViews(e.target.value);
+                              setLinkInitialViews(e.target.value);
+                            }}
+                          />
+                        </div>
+                        <div className="vap-form-group">
+                          <label>Likes</label>
+                          <input
+                            type="number"
+                            className="vap-input"
+                            placeholder="0"
+                            value={singleInitialLikes}
+                            onChange={(e) => {
+                              setSingleInitialLikes(e.target.value);
+                              setLinkInitialLikes(e.target.value);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Privacy toggle */}
+                    {singleSourceType !== "excel" && (
+                      <div className="vap-form-group">
+                        <label>Privacy <span className="required">*</span></label>
+                        <div style={{ display: "flex", gap: "10px" }}>
+                          <button
+                            type="button"
+                            className={`vap-privacy-btn ${singlePrivacy === "public" ? "active-public" : ""}`}
+                            onClick={() => {
+                              setSinglePrivacy("public");
+                              setLinkPrivacy("public");
+                            }}
+                          >
+                            🌍 Public
+                          </button>
+                          <button
+                            type="button"
+                            className={`vap-privacy-btn ${singlePrivacy === "private" ? "active-private" : ""}`}
+                            onClick={() => {
+                              setSinglePrivacy("private");
+                              setLinkPrivacy("private");
+                            }}
+                          >
+                            🔒 Private
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Bottom Publish Button */}
+                    {singleSourceType !== "excel" && (
+                      <div style={{ marginTop: "20px" }}>
                         <button
                           type="button"
                           className="vap-btn-primary"
-                          disabled={isImportingExcel || excelParsedRows.filter((r) => r.isValid).length === 0}
-                          onClick={handleImportExcelVideos}
+                          style={{
+                            width: "100%",
+                            padding: "12px 20px",
+                            fontSize: "0.95rem",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "8px"
+                          }}
+                          disabled={isUploadingSingle || isFetchingMeta}
+                          onClick={handleSingleUploadSubmit}
                         >
-                          {isImportingExcel
-                            ? `Importing... (${excelProgress}%)`
-                            : `Import ${excelParsedRows.filter((r) => r.isValid).length} Valid Videos`}
+                          {isUploadingSingle ? (
+                            <><Loader2 className="animate-spin" size={18} /> Uploading & Publishing...</>
+                          ) : (
+                            <><UploadCloud size={18} /> Publish Video</>
+                          )}
                         </button>
                       </div>
+                    )}
 
-                      {/* Row-level errors & details table */}
-                      <div className="vap-table-container">
-                        <table className="vap-excel-validation-table">
-                          <thead>
-                            <tr>
-                              <th>Row</th>
-                              <th>Status</th>
-                              <th>Title</th>
-                              <th>Category</th>
-                              <th>Privacy</th>
-                              <th>Duration</th>
-                              <th>Validation Details</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {excelParsedRows.map((r) => (
-                              <tr key={r.rowNum} style={{ background: r.isValid ? "#ffffff" : "#fef2f2" }}>
-                                <td>#{r.rowNum}</td>
-                                <td>
-                                  {r.isValid ? (
-                                    <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ Valid</span>
-                                  ) : (
-                                    <span style={{ color: "#dc2626", fontWeight: 600 }}>⚠ Error</span>
-                                  )}
-                                </td>
-                                <td><strong>{r.title || "(Missing Title)"}</strong></td>
-                                <td>{r.category}</td>
-                                <td>{r.privacy}</td>
-                                <td>{r.duration}</td>
-                                <td>
-                                  {r.isValid ? (
-                                    <span style={{ color: "#16a34a" }}>Ready for import</span>
-                                  ) : (
-                                    <span style={{ color: "#dc2626" }}>{r.errors.join(", ")}</span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    {/* Upload Progress Feedback */}
+                    {isUploadingSingle && (
+                      <div style={{ marginTop: "18px", padding: "14px 16px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Loader2 className="animate-spin" size={15} color="#2563eb" />
+                            {singleUploadStep || "Uploading & processing..."}
+                          </span>
+                          <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "#2563eb" }}>{singleUploadProgress}%</span>
+                        </div>
+                        <div style={{ width: "100%", height: "8px", background: "#e2e8f0", borderRadius: "4px", overflow: "hidden" }}>
+                          <div style={{ width: `${singleUploadProgress}%`, height: "100%", background: singleUploadProgress === 100 ? "#16a34a" : "linear-gradient(90deg, #2563eb, #3b82f6)", transition: "width 0.25s ease-in-out" }} />
+                        </div>
+                        <span style={{ fontSize: "0.78rem", color: "#64748b", marginTop: "6px", display: "block" }}>
+                          Job saved in Upload History. Check status anytime from history menu.
+                        </span>
                       </div>
-                    </div>
-                  )}
+                    )}
+
+                    {/* Upload Success Card */}
+                    {singleUploadSuccessVideo && (
+                      <div style={{ marginTop: "18px", padding: "16px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#15803d", fontWeight: 700, fontSize: "0.95rem" }}>
+                          <CheckCircle2 size={20} color="#16a34a" />
+                          <span>Video Published Successfully!</span>
+                        </div>
+                        <p style={{ margin: "6px 0 14px", fontSize: "0.85rem", color: "#374151" }}>
+                          <strong>{singleUploadSuccessVideo.title}</strong> is live and available for streaming.
+                        </p>
+                        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                          <button type="button" className="vap-btn-primary" style={{ padding: "8px 14px", fontSize: "0.83rem" }}
+                            onClick={() => { if (onViewVideo) onViewVideo(singleUploadSuccessVideo); else window.open(`/?v=${singleUploadSuccessVideo.id}`, "_blank"); }}>
+                            <Play size={14} /><span>Watch Live</span>
+                          </button>
+                          <button type="button" className="vap-btn-secondary" style={{ padding: "8px 14px", fontSize: "0.83rem" }} onClick={() => setActiveNav("history")}>
+                            <History size={14} /><span>Upload History</span>
+                          </button>
+                          <button type="button" className="vap-btn-secondary" style={{ padding: "8px 14px", fontSize: "0.83rem" }} onClick={() => setSingleUploadSuccessVideo(null)}>
+                            Upload Another
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Upload Error Alert */}
+                    {singleUploadError && (
+                      <div style={{ marginTop: "18px", padding: "14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#991b1b", fontWeight: 700 }}>
+                          <AlertCircle size={18} color="#dc2626" />
+                          <span>Upload Error</span>
+                        </div>
+                        <p style={{ margin: "6px 0 0", fontSize: "0.83rem", color: "#b91c1c" }}>{singleUploadError}</p>
+                      </div>
+                    )}
+                  </div>
+
                 </div>
-              )}
+              </div>
+
+              {/* Excel parsed rows — full width below the 2-col card */}
+                {singleSourceType === "excel" && excelParsedRows.length > 0 && (
+                  <div className="vap-card" style={{ marginTop: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexWrap: "wrap", gap: "10px" }}>
+                      <div>
+                        <strong>{excelParsedRows.length} Rows Parsed: </strong>
+                        <span style={{ color: "#16a34a", fontWeight: 600, marginLeft: "6px" }}>{excelParsedRows.filter((r) => r.isValid).length} Valid</span>
+                        {excelValidationErrors.length > 0 && (
+                          <span style={{ color: "#dc2626", fontWeight: 600, marginLeft: "12px" }}>{excelValidationErrors.length} Errors</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="vap-btn-primary"
+                        disabled={isImportingExcel || excelParsedRows.filter((r) => r.isValid).length === 0}
+                        onClick={handleImportExcelVideos}
+                      >
+                        {isImportingExcel ? `Importing... (${excelProgress}%)` : `Import ${excelParsedRows.filter((r) => r.isValid).length} Valid Videos`}
+                      </button>
+                    </div>
+                    <div className="vap-table-container">
+                      <table className="vap-excel-validation-table">
+                        <thead>
+                          <tr>
+                            <th>Row</th><th>Status</th><th>Title</th><th>Category</th><th>Privacy</th><th>Duration</th><th>Validation</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {excelParsedRows.map((r) => (
+                            <tr key={r.rowNum} style={{ background: r.isValid ? "#ffffff" : "#fef2f2" }}>
+                              <td>#{r.rowNum}</td>
+                              <td>{r.isValid ? <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ Valid</span> : <span style={{ color: "#dc2626", fontWeight: 600 }}>⚠ Error</span>}</td>
+                              <td><strong>{r.title || "(Missing Title)"}</strong></td>
+                              <td>{r.category}</td>
+                              <td>{r.privacy}</td>
+                              <td>{r.duration}</td>
+                              <td>{r.isValid ? <span style={{ color: "#16a34a" }}>Ready</span> : <span style={{ color: "#dc2626" }}>{r.errors.join(", ")}</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
             </div>
           )}
 
@@ -3452,6 +3486,38 @@ export default function AdminPanel({
                             }}
                           />
                         </div>
+                        {tagsList.length > 0 && (
+                          <div className="vap-suggested-tags">
+                            <span className="vap-suggested-label">Available Tags (click to toggle):</span>
+                            <div className="vap-suggested-chips">
+                              {tagsList.map((t) => {
+                                const isSelected = (editingVideo.tags || []).includes(t.name);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={t.id || t.name}
+                                    className={`vap-tag-chip ${isSelected ? "selected" : ""}`}
+                                    onClick={() => {
+                                      if (isSelected) {
+                                        setEditingVideo({
+                                          ...editingVideo,
+                                          tags: (editingVideo.tags || []).filter((tg) => tg !== t.name)
+                                        });
+                                      } else {
+                                        setEditingVideo({
+                                          ...editingVideo,
+                                          tags: [...(editingVideo.tags || []), t.name]
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    {isSelected ? "✓ " : "+ "}{t.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
@@ -3649,6 +3715,128 @@ export default function AdminPanel({
                           </td>
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================
+              SCREEN 6: TAGS
+              ======================================================== */}
+          {activeNav === "tags" && (
+            <div>
+              <div className="vap-page-header">
+                <h2 className="vap-page-title">Tags Management</h2>
+              </div>
+
+              {/* Add Tag Form */}
+              <div className="vap-card" style={{ marginBottom: "20px" }}>
+                <form onSubmit={handleAddTag} style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+                  <div className="vap-form-group" style={{ flex: 1, margin: 0 }}>
+                    <label>New Tag Name</label>
+                    <input
+                      type="text"
+                      className="vap-input"
+                      placeholder="e.g. Desi, Trending, Romance, Bhabhi, MMS"
+                      value={newTagName}
+                      onChange={(e) => setNewTagName(e.target.value)}
+                    />
+                  </div>
+                  <button type="submit" className="vap-btn-primary">
+                    <Plus size={16} />
+                    <span>Add Tag</span>
+                  </button>
+                </form>
+              </div>
+
+              {/* Tags List */}
+              <div className="vap-card">
+                <div className="vap-table-container">
+                  <table className="vap-table">
+                    <thead>
+                      <tr>
+                        <th>Tag Name</th>
+                        <th>Slug</th>
+                        <th>Videos Count</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tagsList.length === 0 ? (
+                        <tr>
+                          <td colSpan="4" style={{ textAlign: "center", padding: "30px", color: "#64748b" }}>
+                            No tags added yet. Create your first tag above.
+                          </td>
+                        </tr>
+                      ) : (
+                        tagsList.map((tag) => (
+                          <tr key={tag.id || tag.name}>
+                            <td>
+                              {editingTagId === tag.id ? (
+                                <input
+                                  type="text"
+                                  className="vap-input"
+                                  value={editingTagName}
+                                  onChange={(e) => setEditingTagName(e.target.value)}
+                                  autoFocus
+                                />
+                              ) : (
+                                <strong>#{tag.name}</strong>
+                              )}
+                            </td>
+                            <td>
+                              <span style={{ color: "#64748b" }}>{tag.slug || tag.name.toLowerCase()}</span>
+                            </td>
+                            <td>
+                              <span className="vap-tag-pill">{tag.count || 0} videos</span>
+                            </td>
+                            <td>
+                              <div className="vap-actions-cell">
+                                {editingTagId === tag.id ? (
+                                  <>
+                                    <button
+                                      className="vap-icon-btn"
+                                      onClick={() => handleUpdateTag(tag.id)}
+                                      title="Save tag"
+                                    >
+                                      <Check size={15} color="#16a34a" />
+                                    </button>
+                                    <button
+                                      className="vap-icon-btn"
+                                      onClick={() => setEditingTagId(null)}
+                                      title="Cancel"
+                                    >
+                                      <X size={15} />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      className="vap-icon-btn"
+                                      onClick={() => {
+                                        setEditingTagId(tag.id);
+                                        setEditingTagName(tag.name);
+                                      }}
+                                      title="Edit tag"
+                                    >
+                                      <Pencil size={15} />
+                                    </button>
+                                    <button
+                                      className="vap-icon-btn danger"
+                                      onClick={() => handleDeleteTag(tag)}
+                                      title="Delete tag"
+                                    >
+                                      <Trash2 size={15} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
