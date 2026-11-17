@@ -81,7 +81,13 @@ export default function WatchView({
 
   const cleanTitle = cleanDisplayTitle(video.title);
   const cleanUrl = cleanVideoUrl(video.videoUrl);
-  const backupUrl = video.backup_url ? cleanVideoUrl(video.backup_url) : null;
+  // Auto-detect alternative dual URL for seamless failover
+  const candidateBackup = (video.active_source === "our_server"
+    ? (video.other_ps_url || video.backup_url)
+    : (video.our_server_url || video.backup_url)) || "";
+  const cleanBackup = candidateBackup ? cleanVideoUrl(candidateBackup) : null;
+  const backupUrl = cleanBackup && cleanBackup !== cleanUrl ? cleanBackup : null;
+
   const playerSources = [
     {
       src: cleanUrl,

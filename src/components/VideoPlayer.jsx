@@ -5,6 +5,11 @@ import "video.js/dist/video-js.css";
 export default function VideoPlayer({ options, onReady }) {
   const videoRef = useRef(null);
   const playerRef = useRef(null);
+  const failoverRef = useRef(false);
+
+  useEffect(() => {
+    failoverRef.current = false;
+  }, [options.sources]);
 
   useEffect(() => {
     // Make sure Video.js player is only initialized once
@@ -24,6 +29,22 @@ export default function VideoPlayer({ options, onReady }) {
           onReady(player);
         }
       }));
+
+      // Automatic failover between URLs if primary stream fails
+      player.on("error", () => {
+        const sources = options.sources || [];
+        if (!failoverRef.current && sources.length > 1) {
+          failoverRef.current = true;
+          const backupSource = sources[1];
+          if (backupSource && backupSource.src) {
+            console.warn("[VideoPlayer] Primary URL failed, auto-shifting to backup URL:", backupSource.src);
+            player.error(null);
+            player.src(backupSource);
+            player.load();
+            player.play().catch(() => {});
+          }
+        }
+      });
     } else if (playerRef.current) {
       const player = playerRef.current;
       player.autoplay(options.autoplay);

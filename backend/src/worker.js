@@ -741,12 +741,12 @@ export default {
 
         const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-        let orderBy = 'ORDER BY rowid DESC';
+        let orderBy = 'ORDER BY created_at DESC, rowid DESC';
         if (sort === 'popular') orderBy = 'ORDER BY likes DESC, rowid DESC';
         else if (sort === 'most_viewed') orderBy = 'ORDER BY views DESC, rowid DESC';
         else if (sort === 'longest') orderBy = 'ORDER BY duration DESC, rowid DESC';
         else if (sort === 'random') orderBy = 'ORDER BY RANDOM()';
-        else if (sort === 'newest') orderBy = 'ORDER BY rowid DESC';
+        else if (sort === 'newest') orderBy = 'ORDER BY created_at DESC, rowid DESC';
 
         let results = [];
         let totalVideos = 0;
@@ -1330,10 +1330,19 @@ export default {
 
         videosMemoryCache.clear();
 
+        const formattedResults = results.map(vid => ({
+          ...vid,
+          videoUrl: resolveMediaUrl(vid?.videoUrl || ''),
+          thumbnail: resolveMediaUrl(vid?.thumbnail || ''),
+          our_server_url: resolveMediaUrl(vid?.our_server_url || ''),
+          backup_url: resolveMediaUrl(vid?.backup_url || ''),
+          other_ps_url: resolveMediaUrl(vid?.other_ps_url || '')
+        }));
+
         return json({
           success: true,
           message: `Successfully synced ${results.length} video(s) to Server Storage (Cloudflare R2)!`,
-          results
+          results: formattedResults
         });
       }
 
@@ -1627,11 +1636,18 @@ export default {
           active_source: ourServerUrl ? 'our_server' : 'other_ps'
         };
 
-        if (body.created_at) {
+        if (body.isCustomDateTime && body.created_at) {
           allCandidateFields.created_at = body.created_at;
         } else {
-          // Format ISO-like UTC timestamp for SQLite ORDER BY consistency
+          // Format real-time UTC timestamp so default/real-time uploads always appear first
           allCandidateFields.created_at = new Date().toISOString().replace('T', ' ').substring(0, 19);
+          if (!body.uploadedAt || body.uploadedAt === 'Just now') {
+            const now = new Date();
+            const da = String(now.getDate()).padStart(2, '0');
+            const mo = String(now.getMonth() + 1).padStart(2, '0');
+            const yr = now.getFullYear();
+            allCandidateFields.uploadedAt = `${da}/${mo}/${yr}`;
+          }
         }
 
         // Filter to only columns that actually exist in the table

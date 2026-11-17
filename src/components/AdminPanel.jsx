@@ -33,7 +33,8 @@ import {
   Calendar,
   Clock,
   HardDrive,
-  Copy
+  Copy,
+  ShieldCheck
 } from "lucide-react";
 import { api } from "../services/api";
 import { uploadHistory } from "../services/uploadHistory";
@@ -169,6 +170,7 @@ export default function AdminPanel({
   const [singleDuration, setSingleDuration] = useState("00:00");
   const [singleInitialViews, setSingleInitialViews] = useState("0");
   const [singleInitialLikes, setSingleInitialLikes] = useState("0");
+  const [isCustomDateTime, setIsCustomDateTime] = useState(false);
   const [singleUploadDate, setSingleUploadDate] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1157,19 +1159,21 @@ export default function AdminPanel({
       const initialViewsNum = parseInt(singleInitialViews, 10) || 0;
       const initialLikesNum = parseInt(singleInitialLikes, 10) || 0;
 
-      // Compute formatted created_at & uploadedAt from date/time inputs
-      let formattedCreatedAt = "";
+      // Compute formatted created_at & uploadedAt only if custom date/time was explicitly set
+      let formattedCreatedAt = undefined;
       let formattedUploadedAt = "Just now";
-      try {
-        const dStr = singleUploadDate || new Date().toISOString().substring(0, 10);
-        const tStr = singleUploadTime ? (singleUploadTime.length === 5 ? `${singleUploadTime}:00` : singleUploadTime) : new Date().toTimeString().substring(0, 8);
-        const [yr, mo, da] = dStr.split("-");
-        const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
-        if (!isNaN(dt.getTime())) {
-          formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
-          formattedUploadedAt = `${da}/${mo}/${yr}`;
-        }
-      } catch {}
+      if (isCustomDateTime && singleUploadDate) {
+        try {
+          const dStr = singleUploadDate;
+          const tStr = singleUploadTime ? (singleUploadTime.length === 5 ? `${singleUploadTime}:00` : singleUploadTime) : "12:00:00";
+          const [yr, mo, da] = dStr.split("-");
+          const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
+          if (!isNaN(dt.getTime())) {
+            formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
+            formattedUploadedAt = `${da}/${mo}/${yr}`;
+          }
+        } catch {}
+      }
 
       const newVideo = {
         title: singleTitle.trim(),
@@ -1187,7 +1191,8 @@ export default function AdminPanel({
         likes: initialLikesNum,
         author: "Admin",
         uploadedAt: formattedUploadedAt,
-        created_at: formattedCreatedAt || undefined,
+        created_at: formattedCreatedAt,
+        isCustomDateTime: isCustomDateTime,
         saveToServer: saveToServer
       };
 
@@ -1494,18 +1499,20 @@ export default function AdminPanel({
       const initialViewsNum = parseInt(linkInitialViews, 10) || 0;
       const initialLikesNum = parseInt(linkInitialLikes, 10) || 0;
 
-      let formattedCreatedAt = "";
+      let formattedCreatedAt = undefined;
       let formattedUploadedAt = "Just now";
-      try {
-        const dStr = singleUploadDate || new Date().toISOString().substring(0, 10);
-        const tStr = singleUploadTime ? (singleUploadTime.length === 5 ? `${singleUploadTime}:00` : singleUploadTime) : new Date().toTimeString().substring(0, 8);
-        const [yr, mo, da] = dStr.split("-");
-        const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
-        if (!isNaN(dt.getTime())) {
-          formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
-          formattedUploadedAt = `${da}/${mo}/${yr}`;
-        }
-      } catch {}
+      if (isCustomDateTime && singleUploadDate) {
+        try {
+          const dStr = singleUploadDate;
+          const tStr = singleUploadTime ? (singleUploadTime.length === 5 ? `${singleUploadTime}:00` : singleUploadTime) : "12:00:00";
+          const [yr, mo, da] = dStr.split("-");
+          const dt = new Date(`${yr}-${mo}-${da}T${tStr}`);
+          if (!isNaN(dt.getTime())) {
+            formattedCreatedAt = `${yr}-${mo}-${da} ${tStr}`;
+            formattedUploadedAt = `${da}/${mo}/${yr}`;
+          }
+        } catch {}
+      }
 
       const newVideo = {
         title: finalCleanTitle,
@@ -1523,7 +1530,8 @@ export default function AdminPanel({
         likes: initialLikesNum,
         author: "Admin",
         uploadedAt: formattedUploadedAt,
-        created_at: formattedCreatedAt || undefined,
+        created_at: formattedCreatedAt,
+        isCustomDateTime: isCustomDateTime,
         saveToServer: saveToServer
       };
 
@@ -3879,36 +3887,68 @@ export default function AdminPanel({
                       </div>
                     )}
 
-                    {/* Upload Date & Time (Auto / Manual) */}
+                    {/* Upload Date & Time (Real-Time vs Custom) */}
                     {singleSourceType !== "excel" && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
-                        <div className="vap-form-group" style={{ margin: 0 }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                            <Calendar size={14} color="#2563eb" />
-                            <span>Upload Date</span>
-                            <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: Today)</span>
+                      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isCustomDateTime ? "10px" : "0" }}>
+                          <label style={{ margin: 0, fontWeight: 600, fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "8px", color: "#1e293b", cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={isCustomDateTime}
+                              onChange={(e) => {
+                                setIsCustomDateTime(e.target.checked);
+                                if (e.target.checked && !singleUploadDate) {
+                                  const d = new Date();
+                                  setSingleUploadDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+                                  setSingleUploadTime(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`);
+                                }
+                              }}
+                              style={{ width: "16px", height: "16px", accentColor: "#2563eb", cursor: "pointer" }}
+                            />
+                            <span>Set Custom Upload Date & Time (Backdate)</span>
                           </label>
-                          <input
-                            type="date"
-                            className="vap-input"
-                            value={singleUploadDate}
-                            onChange={(e) => setSingleUploadDate(e.target.value)}
-                          />
+                          {!isCustomDateTime && (
+                            <span style={{ fontSize: "0.75rem", background: "#dcfce7", color: "#15803d", padding: "2px 8px", borderRadius: "12px", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
+                              🕒 Real-Time (Latest Auto)
+                            </span>
+                          )}
                         </div>
-                        <div className="vap-form-group" style={{ margin: 0 }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                            <Clock size={14} color="#2563eb" />
-                            <span>Upload Time</span>
-                            <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 400 }}>(Default: Current Time)</span>
-                          </label>
-                          <input
-                            type="time"
-                            step="1"
-                            className="vap-input"
-                            value={singleUploadTime}
-                            onChange={(e) => setSingleUploadTime(e.target.value)}
-                          />
-                        </div>
+
+                        {!isCustomDateTime && (
+                          <p style={{ margin: "4px 0 0 24px", fontSize: "0.74rem", color: "#64748b" }}>
+                            Video real-time date/time se publish hogi aur feed me sabse upar (#1) dikhegi.
+                          </p>
+                        )}
+
+                        {isCustomDateTime && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginTop: "10px" }}>
+                            <div className="vap-form-group" style={{ margin: 0 }}>
+                              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.8rem" }}>
+                                <Calendar size={13} color="#2563eb" />
+                                <span>Manual Date</span>
+                              </label>
+                              <input
+                                type="date"
+                                className="vap-input"
+                                value={singleUploadDate}
+                                onChange={(e) => setSingleUploadDate(e.target.value)}
+                              />
+                            </div>
+                            <div className="vap-form-group" style={{ margin: 0 }}>
+                              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.8rem" }}>
+                                <Clock size={13} color="#2563eb" />
+                                <span>Manual Time</span>
+                              </label>
+                              <input
+                                type="time"
+                                step="1"
+                                className="vap-input"
+                                value={singleUploadTime}
+                                onChange={(e) => setSingleUploadTime(e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -4345,6 +4385,158 @@ export default function AdminPanel({
                     {/* ════ LEFT COLUMN: Video Link, Video Player with Scrubber & Frame Capture, Thumbnail Link, Thumbnail Preview ════ */}
                     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
 
+                      {/* Active Stream Source & Dual URL Failover Box */}
+                      <div style={{ background: "#f8fafc", border: "1.5px solid #cbd5e1", borderRadius: "10px", padding: "14px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "8px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#334155" }}>
+                              ACTIVE STREAM SOURCE:
+                            </span>
+                            <span style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              padding: "3px 10px",
+                              borderRadius: "6px",
+                              fontSize: "0.78rem",
+                              fontWeight: 700,
+                              background: (editingVideo.active_source === "our_server" || (!editingVideo.active_source && isVideoOnOurServer(editingVideo))) ? "#dbeafe" : "#f3e8ff",
+                              color: (editingVideo.active_source === "our_server" || (!editingVideo.active_source && isVideoOnOurServer(editingVideo))) ? "#1d4ed8" : "#6b21a8"
+                            }}>
+                              {(editingVideo.active_source === "our_server" || (!editingVideo.active_source && isVideoOnOurServer(editingVideo))) ? "☁️ Streaming: Our Server (R2)" : "🔗 Streaming: Other PS (External)"}
+                            </span>
+                          </div>
+
+                          {/* Quick 1-Click Stream Source Switcher */}
+                          {editingVideo.our_server_url && (editingVideo.other_ps_url || editingVideo.backup_url) && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const isCurrentlyOur = (editingVideo.active_source === "our_server" || (!editingVideo.active_source && isVideoOnOurServer(editingVideo)));
+                                const newSource = isCurrentlyOur ? "other_ps" : "our_server";
+                                const newUrl = newSource === "our_server" ? editingVideo.our_server_url : (editingVideo.other_ps_url || editingVideo.backup_url);
+                                setEditingVideo((prev) => ({
+                                  ...prev,
+                                  active_source: newSource,
+                                  videoUrl: newUrl
+                                }));
+                                try {
+                                  await api.switchOtherPsSource(editingVideo.id, newSource);
+                                  showSuccess(`Switched active stream source to ${newSource === "our_server" ? "Our Server (R2)" : "Other PS (External)"}!`);
+                                } catch (e) {
+                                  showError("Could not switch source on server: " + e.message);
+                                }
+                              }}
+                              style={{
+                                background: "#ffffff",
+                                border: "1px solid #94a3b8",
+                                borderRadius: "6px",
+                                padding: "4px 10px",
+                                fontSize: "0.76rem",
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                color: "#1e293b",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "5px"
+                              }}
+                            >
+                              <RefreshCw size={12} />
+                              <span>Switch to {(editingVideo.active_source === "our_server" || (!editingVideo.active_source && isVideoOnOurServer(editingVideo))) ? "Other PS" : "Our Server"}</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Dual URLs Breakdown */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "0.78rem" }}>
+                          {/* Our Server URL */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "#ffffff", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                            <span style={{ fontWeight: 700, color: "#16a34a", minWidth: "95px" }}>☁️ Our Server:</span>
+                            {editingVideo.our_server_url ? (
+                              <input
+                                type="text"
+                                readOnly
+                                value={cleanVideoUrl(editingVideo.our_server_url)}
+                                style={{ flex: 1, border: "none", background: "transparent", fontSize: "0.76rem", color: "#334155", outline: "none" }}
+                              />
+                            ) : (
+                              <span style={{ color: "#94a3b8", flex: 1, fontStyle: "italic" }}>Not yet synced to our server storage</span>
+                            )}
+                            {editingVideo.our_server_url ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(cleanVideoUrl(editingVideo.our_server_url));
+                                  showSuccess("Our Server URL copied!");
+                                }}
+                                style={{ background: "none", border: "none", padding: "2px", cursor: "pointer", color: "#64748b" }}
+                                title="Copy URL"
+                              >
+                                <Copy size={13} />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    showInfo("Syncing video to Cloudflare R2...");
+                                    const res = await api.syncStorageVideos([editingVideo.id]);
+                                    if (res && res.results && res.results[0]) {
+                                      const synced = res.results[0];
+                                      setEditingVideo((prev) => ({
+                                        ...prev,
+                                        our_server_url: synced.our_server_url,
+                                        active_source: "our_server",
+                                        videoUrl: synced.our_server_url
+                                      }));
+                                      showSuccess("Video successfully synced to Cloudflare R2!");
+                                    }
+                                  } catch (e) {
+                                    showError("Sync failed: " + e.message);
+                                  }
+                                }}
+                                style={{ background: "#2563eb", color: "#fff", border: "none", borderRadius: "4px", padding: "3px 8px", fontSize: "0.72rem", cursor: "pointer" }}
+                              >
+                                Sync Now
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Other PS / External URL */}
+                          <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "#ffffff", padding: "6px 8px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                            <span style={{ fontWeight: 700, color: "#6b21a8", minWidth: "95px" }}>🔗 Other PS:</span>
+                            {(editingVideo.other_ps_url || editingVideo.backup_url) ? (
+                              <input
+                                type="text"
+                                readOnly
+                                value={cleanVideoUrl(editingVideo.other_ps_url || editingVideo.backup_url)}
+                                style={{ flex: 1, border: "none", background: "transparent", fontSize: "0.76rem", color: "#334155", outline: "none" }}
+                              />
+                            ) : (
+                              <span style={{ color: "#94a3b8", flex: 1, fontStyle: "italic" }}>No external link</span>
+                            )}
+                            {(editingVideo.other_ps_url || editingVideo.backup_url) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(cleanVideoUrl(editingVideo.other_ps_url || editingVideo.backup_url));
+                                  showSuccess("Other PS URL copied!");
+                                }}
+                                style={{ background: "none", border: "none", padding: "2px", cursor: "pointer", color: "#64748b" }}
+                                title="Copy URL"
+                              >
+                                <Copy size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: "8px", fontSize: "0.72rem", color: "#64748b", display: "flex", alignItems: "center", gap: "4px" }}>
+                          <ShieldCheck size={13} color="#16a34a" />
+                          <span><b>Dual-URL Failover Active:</b> Website par video bina ruke chalegi — ek URL fail hone par player automatic doosre par shift ho jata hai.</span>
+                        </div>
+                      </div>
+
                       {/* 1. Video Link Input */}
                       <div className="vap-form-group" style={{ margin: 0 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
@@ -4547,6 +4739,17 @@ export default function AdminPanel({
                                     controls
                                     crossOrigin="anonymous"
                                     style={{ width: "100%", maxHeight: "200px", borderRadius: "6px", background: "#000", display: "block" }}
+                                    onError={(e) => {
+                                      const candidate = (editingVideo.active_source === "our_server"
+                                        ? (editingVideo.other_ps_url || editingVideo.backup_url)
+                                        : (editingVideo.our_server_url || editingVideo.backup_url)) || "";
+                                      const sec = candidate ? cleanVideoUrl(candidate) : "";
+                                      if (sec && sec !== e.target.src) {
+                                        console.warn("[Admin Edit Preview] Primary stream unavailable, auto-shifting to backup:", sec);
+                                        e.target.src = sec;
+                                        e.target.load();
+                                      }
+                                    }}
                                     onLoadedMetadata={(e) => {
                                       const d = e.target.duration || 0;
                                       setEditVideoDurationSecs(d);
