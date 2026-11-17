@@ -1169,10 +1169,8 @@ export default {
         }
         if (k.startsWith('http://') || k.startsWith('https://')) return k;
         const cleanKey = k.replace(/^\/?(cdn\/)?/, '');
-        if (origin && origin.startsWith('http')) {
-          return `${origin}/cdn/${cleanKey}`;
-        }
-        return `/cdn/${cleanKey}`;
+        const baseOrigin = (origin && origin.startsWith('http')) ? origin.replace(/\/+$/, '') : 'https://viralkam.viralkam-com.workers.dev';
+        return `${baseOrigin}/cdn/${cleanKey}`;
       }
 
       // Helper function to guarantee thumbnail is stored in R2 (thumbnails/ folder)
@@ -1193,7 +1191,8 @@ export default {
             t = t.replace(/https?:\/\/[^\/]+r2\.dev\//, '/cdn/');
           }
           if (t.startsWith('/cdn/')) {
-            return origin ? `${origin}${t}` : t;
+            const baseOrigin = (origin && origin.startsWith('http')) ? origin.replace(/\/+$/, '') : 'https://viralkam.viralkam-com.workers.dev';
+            return `${baseOrigin}${t}`;
           }
           return t;
         }
