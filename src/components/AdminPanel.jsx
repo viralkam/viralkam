@@ -34,11 +34,15 @@ import {
   Clock,
   HardDrive,
   Copy,
-  ShieldCheck
+  ShieldCheck,
+  Sparkles,
+  Bot,
+  Globe
 } from "lucide-react";
 import { api } from "../services/api";
 import { uploadHistory } from "../services/uploadHistory";
 import { cleanDisplayTitle, cleanVideoUrl, FALLBACK_THUMBNAIL } from "../utils/format";
+import { generateVideoSEO_AEO_GEO, extractCategoryAndTagsFromTitle } from "../utils/seoEngine";
 import "./AdminPanel.css";
 
 export default function AdminPanel({
@@ -47,6 +51,7 @@ export default function AdminPanel({
   onAddVideo,
   onUpdateVideo,
   onDeleteVideo,
+  onTaxonomyChange,
   onExitAdmin,
   onViewVideo
 }) {
@@ -255,6 +260,8 @@ export default function AdminPanel({
   const [isVerifyingStorage, setIsVerifyingStorage] = useState(false);
   const [otherPsScopeMode, setOtherPsScopeMode] = useState("latest"); // 'latest' | 'all' | 'selected' | 'date'
   const [otherPsLatestCount, setOtherPsLatestCount] = useState(50);
+  const [isOptimizingAll, setIsOptimizingAll] = useState(false);
+  const [optimizeProgressText, setOptimizeProgressText] = useState("");
 
   // Fetch Stats and Categories on load
   const loadStatsAndCategories = async () => {
@@ -267,7 +274,7 @@ export default function AdminPanel({
 
     try {
       const cats = await api.getCategories();
-      if (cats && cats.length > 0) {
+      if (Array.isArray(cats)) {
         setCategoriesList(cats);
         if (!singleCategory && cats[0]) {
           setSingleCategory(cats[0].name);
@@ -276,11 +283,42 @@ export default function AdminPanel({
     } catch {}
 
     try {
-      const tags = await api.getTags();
-      if (tags && tags.length > 0) {
+      const tags = await api.getTags(true);
+      if (Array.isArray(tags)) {
         setTagsList(tags);
       }
     } catch {}
+
+    if (onTaxonomyChange) {
+      onTaxonomyChange();
+    }
+  };
+
+  // Batch auto-optimize all videos: extract Category + Tags from Title + generate full SEO/AEO/GEO
+  const handleAutoOptimizeAll = async () => {
+    if (isOptimizingAll) return;
+    setIsOptimizingAll(true);
+    setOptimizeProgressText("Starting SEO / AEO / GEO & Category optimization...");
+    try {
+      let offset = 0;
+      let total = 0;
+      let done = false;
+      while (!done) {
+        const res = await api.autoOptimizeAllVideos({ offset, limit: 120, forceReclassify: true });
+        total = res.totalVideos || total;
+        offset = res.nextOffset || (offset + (res.processed || 0));
+        done = Boolean(res.done);
+        setOptimizeProgressText(`Optimized ${Math.min(offset, total)} / ${total} videos...`);
+      }
+      showSuccess(`All ${total} videos updated with SEO, AEO, GEO, Categories & Tags!`);
+      await loadStatsAndCategories();
+      await loadVideos();
+    } catch (err) {
+      showError(err.message || "Failed to auto-optimize videos");
+    } finally {
+      setIsOptimizingAll(false);
+      setOptimizeProgressText("");
+    }
   };
 
   useEffect(() => {
@@ -1175,14 +1213,32 @@ export default function AdminPanel({
         } catch {}
       }
 
-      const newVideo = {
+      const autoSeo = generateVideoSEO_AEO_GEO({
         title: singleTitle.trim(),
         description: singleDescription.trim() || `Watch ${singleTitle.trim()} on platform`,
         category: singleCategory || "General",
         tags: singleTags.length > 0 ? singleTags : [singleCategory, "Trending"],
         duration: singleDuration.trim() || "",
+        thumbnail: finalThumbnailUrl,
+        videoUrl: finalVideoUrl,
+        views: initialViewsNum
+      });
+
+      const newVideo = {
+        title: singleTitle.trim(),
+        description: singleDescription.trim() || `Watch ${singleTitle.trim()} on platform`,
+        category: autoSeo.category,
+        tags: autoSeo.tags,
+        duration: singleDuration.trim() || "",
         videoUrl: finalVideoUrl,
         thumbnail: finalThumbnailUrl,
+        seoTitle: autoSeo.seoTitle,
+        seoDescription: autoSeo.seoDescription,
+        canonicalUrl: autoSeo.canonicalUrl,
+        aeoSummary: autoSeo.aeoSummary,
+        aeoKeyFacts: autoSeo.aeoKeyFacts,
+        geoEntities: autoSeo.geoEntities,
+        schemaJsonLd: autoSeo.schemaJsonLd,
         privacy: singlePrivacy,
         status: singlePrivacy === "private" ? "private" : "published",
         initial_views: initialViewsNum,
@@ -1514,14 +1570,32 @@ export default function AdminPanel({
         } catch {}
       }
 
-      const newVideo = {
+      const autoSeo = generateVideoSEO_AEO_GEO({
         title: finalCleanTitle,
         description: linkDescription.trim() || `Watch ${finalCleanTitle} online.`,
         category: linkCategory || "General",
         tags: linkTags.length > 0 ? linkTags : [linkCategory, "Trending"],
         duration: linkDuration.trim() || "",
+        thumbnail: linkThumbnail.trim() || FALLBACK_THUMBNAIL,
+        videoUrl: finalCleanUrl,
+        views: initialViewsNum
+      });
+
+      const newVideo = {
+        title: finalCleanTitle,
+        description: linkDescription.trim() || `Watch ${finalCleanTitle} online.`,
+        category: autoSeo.category,
+        tags: autoSeo.tags,
+        duration: linkDuration.trim() || "",
         videoUrl: finalCleanUrl,
         thumbnail: linkThumbnail.trim() || FALLBACK_THUMBNAIL,
+        seoTitle: autoSeo.seoTitle,
+        seoDescription: autoSeo.seoDescription,
+        canonicalUrl: autoSeo.canonicalUrl,
+        aeoSummary: autoSeo.aeoSummary,
+        aeoKeyFacts: autoSeo.aeoKeyFacts,
+        geoEntities: autoSeo.geoEntities,
+        schemaJsonLd: autoSeo.schemaJsonLd,
         privacy: linkPrivacy,
         status: linkPrivacy === "private" ? "private" : "published",
         initial_views: initialViewsNum,
@@ -2379,8 +2453,29 @@ export default function AdminPanel({
         }
       }
 
+      const autoSeo = generateVideoSEO_AEO_GEO({
+        id: editingVideo.id,
+        title: editingVideo.title,
+        description: editingVideo.description,
+        category: editingVideo.category,
+        tags: editingVideo.tags,
+        duration: editingVideo.duration || (editVideoDurationSecs ? formatSecsToTime(editVideoDurationSecs) : "00:00"),
+        thumbnail: finalThumbnail,
+        videoUrl: finalVideoUrl,
+        views: viewsNum
+      });
+
       const updatedPayload = {
         ...editingVideo,
+        category: editingVideo.category || autoSeo.category,
+        tags: (Array.isArray(editingVideo.tags) && editingVideo.tags.length > 0) ? editingVideo.tags : autoSeo.tags,
+        seoTitle: editingVideo.seoTitle || autoSeo.seoTitle,
+        seoDescription: editingVideo.seoDescription || autoSeo.seoDescription,
+        canonicalUrl: editingVideo.canonicalUrl || autoSeo.canonicalUrl,
+        aeoSummary: editingVideo.aeoSummary || autoSeo.aeoSummary,
+        aeoKeyFacts: editingVideo.aeoKeyFacts || autoSeo.aeoKeyFacts,
+        geoEntities: (Array.isArray(editingVideo.geoEntities) && editingVideo.geoEntities.length > 0) ? editingVideo.geoEntities : autoSeo.geoEntities,
+        schemaJsonLd: editingVideo.schemaJsonLd || autoSeo.schemaJsonLd,
         videoUrl: finalVideoUrl,
         thumbnail: finalThumbnail,
         privacy: editingVideo.privacy,
@@ -2768,17 +2863,30 @@ export default function AdminPanel({
               ======================================================== */}
           {activeNav === "dashboard" && (
             <div>
-              <div className="vap-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div className="vap-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
                 <h2 className="vap-page-title">Dashboard</h2>
-                <button
-                  className="vap-btn-outline danger"
-                  onClick={handleClearDummyData}
-                  style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.85rem", padding: "6px 12px" }}
-                  title="Remove old test and dummy videos from database"
-                >
-                  <Trash2 size={15} />
-                  <span>Clear Old Dummy Data</span>
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="vap-btn-primary"
+                    onClick={handleAutoOptimizeAll}
+                    disabled={isOptimizingAll}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.84rem", padding: "7px 14px" }}
+                    title="Auto-generate SEO, AEO, GEO, Categories & Tags from Title for all videos"
+                  >
+                    {isOptimizingAll ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}
+                    <span>{isOptimizingAll ? (optimizeProgressText || "Optimizing...") : "Auto SEO/AEO/GEO + Categories & Tags"}</span>
+                  </button>
+                  <button
+                    className="vap-btn-outline danger"
+                    onClick={handleClearDummyData}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.85rem", padding: "6px 12px" }}
+                    title="Remove old test and dummy videos from database"
+                  >
+                    <Trash2 size={15} />
+                    <span>Clear Old Dummy Data</span>
+                  </button>
+                </div>
               </div>
 
               {/* Summary Stats Row */}
@@ -5191,6 +5299,112 @@ export default function AdminPanel({
                               <span>Only visible to authorized administrator</span>
                             </div>
                           </label>
+                        </div>
+                      </div>
+
+                      {/* SEO, AEO & GEO Optimization Box */}
+                      <div style={{
+                        marginTop: "20px",
+                        padding: "16px",
+                        borderRadius: "10px",
+                        background: "#f8fafc",
+                        border: "1px solid #cbd5e1"
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700, fontSize: "0.9rem", color: "#0f172a" }}>
+                            <Sparkles size={16} style={{ color: "#2563eb" }} />
+                            <span>SEO, AEO &amp; GEO Metadata</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="vap-btn-outline"
+                            style={{ fontSize: "0.78rem", padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                            onClick={() => {
+                              const generated = generateVideoSEO_AEO_GEO({
+                                id: editingVideo.id,
+                                title: editingVideo.title,
+                                description: editingVideo.description,
+                                category: editingVideo.category,
+                                tags: editingVideo.tags,
+                                duration: editingVideo.duration,
+                                thumbnail: editingVideo.thumbnail,
+                                videoUrl: editingVideo.videoUrl,
+                                views: editingVideo.views,
+                                forceReclassify: true
+                              });
+                              setEditingVideo({
+                                ...editingVideo,
+                                category: generated.category,
+                                tags: generated.tags,
+                                seoTitle: generated.seoTitle,
+                                seoDescription: generated.seoDescription,
+                                canonicalUrl: generated.canonicalUrl,
+                                aeoSummary: generated.aeoSummary,
+                                aeoKeyFacts: generated.aeoKeyFacts,
+                                geoEntities: generated.geoEntities,
+                                schemaJsonLd: generated.schemaJsonLd
+                              });
+                              showSuccess("SEO, AEO, GEO, Category & Tags auto-generated from Title!");
+                            }}
+                          >
+                            <Sparkles size={13} />
+                            <span>Auto-Generate from Title</span>
+                          </button>
+                        </div>
+
+                        <div className="vap-form-group" style={{ marginBottom: "10px" }}>
+                          <label style={{ fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "5px" }}>
+                            <Globe size={13} style={{ color: "#2563eb" }} /> SEO Title
+                          </label>
+                          <input
+                            type="text"
+                            className="vap-input"
+                            value={editingVideo.seoTitle || ""}
+                            onChange={(e) => setEditingVideo({ ...editingVideo, seoTitle: e.target.value })}
+                            placeholder="Auto-generated SEO Title from Video Title"
+                          />
+                        </div>
+
+                        <div className="vap-form-group" style={{ marginBottom: "10px" }}>
+                          <label style={{ fontSize: "0.8rem" }}>SEO Meta Description</label>
+                          <textarea
+                            className="vap-textarea"
+                            rows={2}
+                            value={editingVideo.seoDescription || ""}
+                            onChange={(e) => setEditingVideo({ ...editingVideo, seoDescription: e.target.value })}
+                            placeholder="Auto-generated SEO Description"
+                          />
+                        </div>
+
+                        <div className="vap-form-group" style={{ marginBottom: "10px" }}>
+                          <label style={{ fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "5px" }}>
+                            <Bot size={13} style={{ color: "#7c3aed" }} /> AEO Summary (AI Answer Engines)
+                          </label>
+                          <textarea
+                            className="vap-textarea"
+                            rows={2}
+                            value={editingVideo.aeoSummary || ""}
+                            onChange={(e) => setEditingVideo({ ...editingVideo, aeoSummary: e.target.value })}
+                            placeholder="Auto-generated AEO summary for ChatGPT / Perplexity / Google AI"
+                          />
+                        </div>
+
+                        <div className="vap-form-group" style={{ marginBottom: 0 }}>
+                          <label style={{ fontSize: "0.8rem" }}>GEO Entities (Comma Separated)</label>
+                          <input
+                            type="text"
+                            className="vap-input"
+                            value={
+                              Array.isArray(editingVideo.geoEntities)
+                                ? editingVideo.geoEntities.join(", ")
+                                : (typeof editingVideo.geoEntities === "string" ? editingVideo.geoEntities : "")
+                            }
+                            onChange={(e) => setEditingVideo({
+                              ...editingVideo,
+                              geoEntities: e.target.value.split(",").map(s => s.trim()).filter(Boolean)
+                            })}
+                            placeholder="VIRALKAAM, Category, Tags, HD Video Streaming"
+                          />
                         </div>
                       </div>
 

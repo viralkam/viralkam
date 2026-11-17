@@ -6,7 +6,7 @@ import WatchView from "./components/WatchView";
 import AdminPanel from "./components/AdminPanel";
 import LegalPage from "./components/LegalPage";
 import { VideoSkeletonGrid } from "./components/VideoSkeleton";
-import { INITIAL_VIDEOS, CATEGORIES } from "./mockVideos";
+import { INITIAL_VIDEOS } from "./mockVideos";
 import { api } from "./services/api";
 
 export default function App() {
@@ -191,12 +191,26 @@ export default function App() {
     setSearchQuery("");
     window.history.pushState({}, "", "/");
     window.scrollTo({ top: 0, behavior: "smooth" });
+    refreshCategoriesAndTags();
     loadData(1);
+  };
+
+  const handleSelectFilter = (filterId) => {
+    setActiveFilter(filterId);
+    setActiveCategory(null);
+    setActiveTag(null);
+    setSearchQuery("");
+    setSelectedVideo(null);
+    setIsAdminOpen(false);
+    setActiveLegalPage(null);
+    window.history.pushState({}, "", "/");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleSelectCategory = (cat) => {
     setActiveCategory(cat);
     setActiveTag(null);
+    setSearchQuery("");
     setSelectedVideo(null);
     setIsAdminOpen(false);
     setActiveLegalPage(null);
@@ -207,6 +221,7 @@ export default function App() {
   const handleSelectTag = (tagName) => {
     setActiveTag(tagName);
     setActiveCategory(null);
+    setSearchQuery("");
     setSelectedVideo(null);
     setIsAdminOpen(false);
     setActiveLegalPage(null);
@@ -230,21 +245,21 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Dynamic categories and tags state loaded from backend / database
-  const [categories, setCategories] = useState(CATEGORIES);
+  // Dynamic categories and tags loaded strictly from Admin Panel / Database (no hardcoded fallback)
+  const [categories, setCategories] = useState([]);
   const [tags, setTags] = useState([]);
 
   const refreshCategoriesAndTags = React.useCallback(async () => {
     try {
       const cats = await api.getCategories();
-      if (cats && cats.length > 0) {
+      if (Array.isArray(cats)) {
         setCategories(cats.map((c) => c.name));
       }
     } catch {}
 
     try {
-      const tList = await api.getTags();
-      if (tList && tList.length > 0) {
+      const tList = await api.getTags(true);
+      if (Array.isArray(tList)) {
         setTags(tList);
       }
     } catch {}
@@ -300,6 +315,7 @@ export default function App() {
         onAddVideo={handleAddVideo}
         onUpdateVideo={handleUpdateVideo}
         onDeleteVideo={handleDeleteVideo}
+        onTaxonomyChange={refreshCategoriesAndTags}
         onExitAdmin={handleNavigateHome}
         onViewVideo={handleSelectVideo}
       />
@@ -316,15 +332,13 @@ export default function App() {
         onOpenAdmin={handleOpenAdmin}
         isAdminActive={isAdminOpen}
         categories={categories}
+        activeCategory={activeCategory}
         onSelectCategory={handleSelectCategory}
         tags={tags}
+        activeTag={activeTag}
         onSelectTag={handleSelectTag}
         activeFilter={activeFilter}
-        setActiveFilter={(f) => {
-          setActiveFilter(f);
-          setActiveCategory(null);
-          setActiveTag(null);
-        }}
+        setActiveFilter={handleSelectFilter}
       />
 
       {/* Main Body Layout */}

@@ -602,17 +602,36 @@ export default {
       // 2.4 GET /api/tags - list all tags (cached to prevent exceeding D1 read limits)
       if (pathname === '/api/tags' && method === 'GET') {
         const now = Date.now();
-        if (tagsMemoryCache.data && (now - tagsMemoryCache.timestamp < 10 * 60 * 1000)) {
+        const bypass = url.searchParams.get('refresh') === '1';
+        if (!bypass && tagsMemoryCache.data && (now - tagsMemoryCache.timestamp < 10 * 60 * 1000)) {
           return json({ success: true, tags: tagsMemoryCache.data });
         }
 
         try {
           const { results: tagRows } = await env.DB.prepare('SELECT id, name, slug FROM tags ORDER BY name ASC').all();
+          const countMap = new Map();
+          try {
+            const { results: vidTags } = await env.DB.prepare('SELECT tags FROM videos WHERE tags IS NOT NULL').all();
+            for (const row of (vidTags || [])) {
+              let parsed = [];
+              try {
+                const p = JSON.parse(row.tags);
+                parsed = Array.isArray(p) ? p : String(row.tags).split(',');
+              } catch {
+                parsed = String(row.tags || '').split(',');
+              }
+              for (const t of parsed) {
+                const k = String(t || '').trim().toLowerCase();
+                if (k) countMap.set(k, (countMap.get(k) || 0) + 1);
+              }
+            }
+          } catch {}
+
           const tagsWithCounts = (tagRows || []).map(r => ({
             id: r.id,
             name: r.name,
             slug: r.slug,
-            count: 0
+            count: countMap.get(String(r.name || '').trim().toLowerCase()) || 0
           }));
 
           tagsMemoryCache = { data: tagsWithCounts, timestamp: now };
@@ -628,6 +647,194 @@ export default {
         }
       }
 
+      // Helper: Auto-extract Category, Tags, and full SEO/AEO/GEO metadata from video title & existing info
+      const buildVideoSeoAeoGeoAndTaxonomy = (videoInput = {}, forceReclassify = false) => {
+        const rawTitle = String(videoInput.title || '').trim();
+        let cleanTitle = rawTitle;
+        if (cleanTitle.startsWith('http://') || cleanTitle.startsWith('https://')) {
+          try {
+            const cleaned = cleanTitle.replace(/(https?:\/\/[^\s]+)(https?:\/\/)/i, '$1');
+            const parts = cleaned.split('/');
+            const lastPart = parts[parts.length - 1] || '';
+            cleanTitle = decodeURIComponent(lastPart).replace(/\.[a-zA-Z0-9]+$/, '').replace(/[-_+]/g, ' ').replace(/\s+/g, ' ').trim();
+          } catch {}
+        } else {
+          cleanTitle = cleanTitle.replace(/\.(mp4|webm|mkv|mov|avi)$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+        cleanTitle = cleanTitle.replace(/\b(480p?|720p?|1080p?|r2)\b$/i, '').trim() || 'Trending Viral Video';
+
+        let existingTagsArr = [];
+        if (Array.isArray(videoInput.tags)) {
+          existingTagsArr = videoInput.tags;
+        } else if (typeof videoInput.tags === 'string' && videoInput.tags.trim()) {
+          try {
+            const parsed = JSON.parse(videoInput.tags);
+            existingTagsArr = Array.isArray(parsed) ? parsed : videoInput.tags.split(',');
+          } catch {
+            existingTagsArr = videoInput.tags.split(',');
+          }
+        }
+
+        const desc = String(videoInput.description || '').trim();
+        const combinedText = `${cleanTitle} ${desc} ${existingTagsArr.join(' ')}`.toLowerCase();
+
+        const CATEGORY_RULES = [
+          { name: 'Webseries', keywords: ['webseries', 'web series', 'ullu', 'kooku', 'altbalaji', 'episode', 'series', 'full movie', 'movie'] },
+          { name: 'MMS', keywords: ['mms', 'leaked', 'scandal', 'hidden', 'private', 'cam', 'caught', 'viral mms'] },
+          { name: 'Regional', keywords: ['tamil', 'telugu', 'mallu', 'malayalam', 'bengali', 'bhojpuri', 'punjabi', 'marathi', 'gujarati', 'kannada', 'south', 'pakistani', 'nepali'] },
+          { name: 'Shorts', keywords: ['shorts', 'short', 'reel', 'reels', 'insta', 'instagram', 'tiktok', 'clip', 'status'] },
+          { name: 'Couple', keywords: ['couple', 'wife', 'husband', 'gf', 'bf', 'girlfriend', 'boyfriend', 'married', 'honeymoon', 'romance', 'romantic', 'lover', 'newly married', 'suhagrat'] },
+          { name: 'Bhabhi', keywords: ['bhabhi', 'devar', 'aunty', 'aunt', 'milf', 'padosan', 'chachi', 'mami'] },
+          { name: 'College', keywords: ['college', 'hostel', 'student', 'school', 'teen', 'campus', 'tuition', 'teacher'] },
+          { name: 'Desi', keywords: ['desi', 'indian', 'hindi', 'gaon', 'village', 'dehati', 'bharat', 'hindustani'] },
+          { name: 'Trending', keywords: ['trending', 'latest', '2026', '2025', 'new', 'hot', 'top'] },
+          { name: 'Viral', keywords: ['viral', 'popular', 'best', 'full', 'hd', '4k', 'exclusive'] }
+        ];
+
+        const TAG_RULES = [
+          { tag: 'Desi', keywords: ['desi', 'indian', 'gaon', 'village', 'dehati'] },
+          { tag: 'Hindi', keywords: ['hindi', 'hindi audio', 'desi'] },
+          { tag: 'Indian', keywords: ['indian', 'desi', 'bharat'] },
+          { tag: 'MMS', keywords: ['mms', 'leaked', 'scandal', 'hidden'] },
+          { tag: 'Couple', keywords: ['couple', 'gf', 'bf', 'girlfriend', 'boyfriend', 'wife', 'husband', 'married'] },
+          { tag: 'Bhabhi', keywords: ['bhabhi', 'devar', 'aunty', 'milf'] },
+          { tag: 'College', keywords: ['college', 'hostel', 'student', 'campus'] },
+          { tag: 'Webseries', keywords: ['webseries', 'web series', 'episode', 'series', 'ullu'] },
+          { tag: 'Shorts', keywords: ['shorts', 'reel', 'reels', 'insta', 'clip'] },
+          { tag: 'Regional', keywords: ['tamil', 'telugu', 'mallu', 'bengali', 'punjabi', 'marathi', 'bhojpuri', 'south'] },
+          { tag: 'Tamil', keywords: ['tamil'] },
+          { tag: 'Mallu', keywords: ['mallu', 'malayalam'] },
+          { tag: 'Punjabi', keywords: ['punjabi'] },
+          { tag: 'Bengali', keywords: ['bengali'] },
+          { tag: 'Pakistani', keywords: ['pakistani', 'pakistan'] },
+          { tag: 'Romance', keywords: ['romance', 'romantic', 'honeymoon', 'lover'] },
+          { tag: 'Trending', keywords: ['trending', 'latest', 'new', '2025', '2026'] },
+          { tag: 'Viral', keywords: ['viral', 'popular', 'exclusive'] },
+          { tag: 'HD', keywords: ['hd', '4k', 'full', 'uhd'] }
+        ];
+
+        const parseDurSecs = (durStr) => {
+          if (!durStr) return 0;
+          const p = String(durStr).split(':').map(Number);
+          if (p.some(isNaN)) return 0;
+          if (p.length === 2) return p[0] * 60 + p[1];
+          if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+          return 0;
+        };
+
+        let resolvedCategory = String(videoInput.category || '').trim();
+        const isGenericCat = !resolvedCategory || resolvedCategory.toLowerCase() === 'general';
+        if (isGenericCat || forceReclassify) {
+          let matched = '';
+          for (const r of CATEGORY_RULES) {
+            if (r.keywords.some(kw => combinedText.includes(kw))) {
+              matched = r.name;
+              break;
+            }
+          }
+          if (!matched) {
+            const secs = parseDurSecs(videoInput.duration);
+            matched = (secs > 0 && secs <= 65) ? 'Shorts' : 'Viral';
+          }
+          resolvedCategory = matched;
+        }
+
+        const tagMap = new Map();
+        const addTag = (raw) => {
+          const t = String(raw || '').replace(/^#/, '').trim();
+          if (!t || t.length < 2 || t.length > 32) return;
+          const low = t.toLowerCase();
+          if (low === 'general' || low === 'viralkam' || low === 'viralkaam' || low === 'null') return;
+          if (!tagMap.has(low)) tagMap.set(low, t);
+        };
+
+        addTag(resolvedCategory);
+        for (const r of TAG_RULES) {
+          if (r.keywords.some(kw => combinedText.includes(kw))) {
+            addTag(r.tag);
+          }
+        }
+        for (const t of existingTagsArr) addTag(t);
+        if (tagMap.size < 3) addTag('Viral');
+        if (tagMap.size < 3) addTag('Trending');
+        if (tagMap.size < 3) addTag('HD');
+
+        const resolvedTags = Array.from(tagMap.values()).slice(0, 7);
+        const durStr = String(videoInput.duration || '').trim();
+        let isoDuration = '';
+        if (durStr) {
+          const dp = durStr.split(':').map(Number);
+          if (!dp.some(isNaN)) {
+            if (dp.length === 2) isoDuration = `PT${dp[0]}M${dp[1]}S`;
+            else if (dp.length === 3) isoDuration = `PT${dp[0]}H${dp[1]}M${dp[2]}S`;
+          }
+        }
+
+        const vidId = videoInput.id || `vid-${Date.now()}`;
+        const seoTitle = `${cleanTitle} - Full HD ${resolvedCategory} Video | VIRALKAAM`;
+        const isGenericDesc = !desc || desc.toLowerCase().startsWith('watch full video on') || desc.toLowerCase().startsWith('watch video on');
+        const seoDescription = !isGenericDesc
+          ? (desc.length > 158 ? desc.substring(0, 155) + '...' : desc)
+          : `Watch ${cleanTitle} online in Full HD on VIRALKAAM. Category: ${resolvedCategory}. Tags: ${resolvedTags.slice(0, 4).join(', ')}. Fast free streaming.`;
+        const canonicalUrl = `https://viralkaam.com/?v=${vidId}`;
+
+        const aeoSummary = `"${cleanTitle}" is a featured ${resolvedCategory} video on VIRALKAAM.COM tagged with ${resolvedTags.join(', ')}. Streamed in high definition${durStr ? ` with a runtime of ${durStr}` : ''} for instant playback.`;
+        const aeoKeyFacts = [
+          { question: `What is "${cleanTitle}" about?`, answer: `${cleanTitle} is a popular ${resolvedCategory} video featuring ${resolvedTags.slice(0, 4).join(', ')} content streaming in HD on VIRALKAAM.` },
+          { question: `Which category and tags belong to "${cleanTitle}"?`, answer: `It belongs to the ${resolvedCategory} category with tags: ${resolvedTags.join(', ')}.` },
+          { question: `Where can I watch "${cleanTitle}"?`, answer: `Available for free high-speed streaming on VIRALKAAM.COM without paywalls.` },
+          { question: `What is the duration of this video?`, answer: durStr ? `The total video duration is ${durStr} with instant player load.` : `Instant high-performance HD streaming.` }
+        ];
+
+        const geoEntities = Array.from(new Set([
+          'VIRALKAAM',
+          'VIRALKAAM.COM',
+          resolvedCategory,
+          ...resolvedTags,
+          'HD Video Streaming',
+          'Digital Media Streaming'
+        ]));
+
+        const schemaJsonLd = {
+          '@context': 'https://schema.org',
+          '@type': 'VideoObject',
+          '@id': `https://viralkaam.com/?v=${vidId}#video`,
+          name: seoTitle,
+          description: seoDescription,
+          thumbnailUrl: [videoInput.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1280&h=720&auto=format&fit=crop&q=80'],
+          uploadDate: videoInput.created_at ? new Date(String(videoInput.created_at).replace(' ', 'T') + 'Z').toISOString() : new Date().toISOString(),
+          duration: isoDuration,
+          contentUrl: videoInput.videoUrl || '',
+          embedUrl: canonicalUrl,
+          genre: resolvedCategory,
+          keywords: geoEntities.join(', '),
+          publisher: {
+            '@type': 'Organization',
+            name: 'VIRALKAAM',
+            url: 'https://viralkaam.com',
+            logo: { '@type': 'ImageObject', url: 'https://viralkaam.com/favicon.svg' }
+          },
+          interactionStatistic: {
+            '@type': 'InteractionCounter',
+            interactionType: { '@type': 'WatchAction' },
+            userInteractionCount: Number(videoInput.views || 0)
+          }
+        };
+
+        return {
+          cleanTitle,
+          category: resolvedCategory,
+          tags: resolvedTags,
+          seoTitle,
+          seoDescription,
+          canonicalUrl,
+          aeoSummary,
+          aeoKeyFacts,
+          geoEntities,
+          schemaJsonLd
+        };
+      };
+
       // 2.5 POST /api/tags - add new tag
       if (pathname === '/api/tags' && method === 'POST') {
         await ensureD1Columns(env.DB);
@@ -637,6 +844,7 @@ export default {
         const slug = (body.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
         try {
           const res = await env.DB.prepare('INSERT INTO tags (name, slug) VALUES (?, ?)').bind(name, slug).run();
+          tagsMemoryCache = { data: null, timestamp: 0 };
           return json({
             success: true,
             tag: { id: res.meta?.last_row_id || Date.now(), name, slug, count: 0 },
@@ -660,6 +868,7 @@ export default {
 
         const slug = (body.slug || newName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
         await env.DB.prepare('UPDATE tags SET name = ?, slug = ? WHERE id = ?').bind(newName, slug, id).run();
+        tagsMemoryCache = { data: null, timestamp: 0 };
 
         return json({ success: true, tag: { id, name: newName, slug }, message: 'Tag updated' });
       }
@@ -672,6 +881,7 @@ export default {
         if (!existing) return json({ success: false, message: 'Tag not found' }, 404);
 
         await env.DB.prepare('DELETE FROM tags WHERE id = ?').bind(id).run();
+        tagsMemoryCache = { data: null, timestamp: 0 };
         return json({ success: true, message: `Tag "${existing.name}" deleted` });
       }
 
@@ -686,7 +896,95 @@ export default {
              OR title LIKE '%Secret Roadmap%'
              OR videoUrl LIKE '%oceans.mp4%'
         `).run();
+        videosMemoryCache.clear();
         return json({ success: true, message: 'Dummy test data cleared successfully' });
+      }
+
+      // 2.9 POST /api/admin/auto-optimize-all - Auto-generate Categories, Tags, SEO, AEO, GEO from titles in batches
+      if (pathname === '/api/admin/auto-optimize-all' && method === 'POST') {
+        const isAdmin = await verifyAdminToken(request);
+        if (!isAdmin) return json({ success: false, message: 'Unauthorized' }, 401);
+        await ensureD1Columns(env.DB);
+
+        const body = await request.json().catch(() => ({}));
+        const offset = Math.max(0, parseInt(body.offset, 10) || 0);
+        const limit = Math.min(200, Math.max(10, parseInt(body.limit, 10) || 120));
+        const forceReclassify = body.forceReclassify !== false;
+
+        const totalRow = await env.DB.prepare('SELECT COUNT(*) as total FROM videos').first();
+        const totalVideos = totalRow?.total || 0;
+
+        const { results: batchVideos } = await env.DB.prepare(
+          'SELECT id, title, description, duration, category, tags, thumbnail, videoUrl, views, created_at FROM videos ORDER BY rowid ASC LIMIT ? OFFSET ?'
+        ).bind(limit, offset).all();
+
+        const discoveredCats = new Set();
+        const discoveredTags = new Set();
+        const statements = [];
+
+        for (const vid of (batchVideos || [])) {
+          const opt = buildVideoSeoAeoGeoAndTaxonomy(vid, forceReclassify);
+          discoveredCats.add(opt.category);
+          for (const t of opt.tags) discoveredTags.add(t);
+
+          statements.push(
+            env.DB.prepare(`
+              UPDATE videos SET
+                category = ?,
+                tags = ?,
+                seoTitle = ?,
+                seoDescription = ?,
+                canonicalUrl = ?,
+                aeoSummary = ?,
+                aeoKeyFacts = ?,
+                geoEntities = ?,
+                schemaJsonLd = ?
+              WHERE id = ?
+            `).bind(
+              opt.category,
+              JSON.stringify(opt.tags),
+              opt.seoTitle,
+              opt.seoDescription,
+              opt.canonicalUrl,
+              opt.aeoSummary,
+              JSON.stringify(opt.aeoKeyFacts),
+              JSON.stringify(opt.geoEntities),
+              JSON.stringify(opt.schemaJsonLd),
+              vid.id
+            )
+          );
+        }
+
+        // Register all discovered categories and tags cleanly into admin tables
+        for (const catName of discoveredCats) {
+          const slug = catName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          statements.push(env.DB.prepare('INSERT OR IGNORE INTO categories (name, slug) VALUES (?, ?)').bind(catName, slug));
+        }
+        for (const tagName of discoveredTags) {
+          const slug = tagName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          statements.push(env.DB.prepare('INSERT OR IGNORE INTO tags (name, slug) VALUES (?, ?)').bind(tagName, slug));
+        }
+
+        // Execute in chunks of 50 statements per D1 batch
+        for (let i = 0; i < statements.length; i += 50) {
+          await env.DB.batch(statements.slice(i, i + 50));
+        }
+
+        videosMemoryCache.clear();
+        tagsMemoryCache = { data: null, timestamp: 0 };
+
+        const processed = (batchVideos || []).length;
+        const nextOffset = offset + processed;
+        return json({
+          success: true,
+          processed,
+          offset,
+          nextOffset,
+          totalVideos,
+          done: nextOffset >= totalVideos || processed === 0,
+          categoriesSynced: Array.from(discoveredCats),
+          tagsSyncedCount: discoveredTags.size
+        });
       }
 
       // 3. GET /api/videos (with caching, R2 fallback & protection against D1 read limits)
@@ -735,8 +1033,8 @@ export default {
         }
 
         if (tag) {
-          conditions.push('(tags LIKE ? OR tags LIKE ?)');
-          bindings.push(`%"${tag}"%`, `%, ${tag}%`);
+          conditions.push('(LOWER(tags) LIKE LOWER(?) OR LOWER(tags) LIKE LOWER(?))');
+          bindings.push(`%"${tag}"%`, `%${tag}%`);
         }
 
         const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -983,9 +1281,43 @@ export default {
         const viewsToSet = body.views !== undefined ? Number(body.views) : (body.initial_views !== undefined ? Number(body.initial_views) : Number(existing.views || existing.initial_views || 0));
         const likesToSet = body.likes !== undefined ? Number(body.likes) : (body.initial_likes !== undefined ? Number(body.initial_likes) : Number(existing.likes || existing.initial_likes || 0));
 
+        const nextTitle = body.title !== undefined ? body.title : existing.title;
+        const nextDesc = body.description !== undefined ? body.description : existing.description;
+        const nextDur = body.duration !== undefined ? body.duration : existing.duration;
+        const nextThumb = body.thumbnail !== undefined ? body.thumbnail : existing.thumbnail;
+        const nextVideoUrl = body.videoUrl !== undefined ? body.videoUrl : existing.videoUrl;
+        const rawNextCat = body.category !== undefined ? body.category : existing.category;
+        const rawNextTags = body.tags !== undefined ? body.tags : existing.tags;
+
+        const autoMeta = buildVideoSeoAeoGeoAndTaxonomy({
+          id,
+          title: nextTitle,
+          description: nextDesc,
+          duration: nextDur,
+          category: rawNextCat,
+          tags: rawNextTags,
+          thumbnail: nextThumb,
+          videoUrl: nextVideoUrl,
+          views: viewsToSet,
+          created_at: body.created_at || existing.created_at
+        }, false);
+
+        const finalCategory = (rawNextCat && String(rawNextCat).trim() && String(rawNextCat).trim().toLowerCase() !== 'general')
+          ? String(rawNextCat).trim()
+          : autoMeta.category;
+        const finalTagsArr = Array.isArray(body.tags) && body.tags.length > 0 ? body.tags : autoMeta.tags;
+
+        // Auto-register category into categories table
+        if (finalCategory) {
+          const catSlug = finalCategory.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          try {
+            await env.DB.prepare('INSERT OR IGNORE INTO categories (name, slug) VALUES (?, ?)').bind(finalCategory, catSlug).run();
+          } catch {}
+        }
+
         // Auto-register new tags into tags table
-        if (Array.isArray(body.tags)) {
-          for (const t of body.tags) {
+        if (Array.isArray(finalTagsArr)) {
+          for (const t of finalTagsArr) {
             const cleanT = String(t).trim();
             if (cleanT) {
               const tSlug = cleanT.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -1005,6 +1337,13 @@ export default {
             tags = ?,
             thumbnail = ?,
             videoUrl = ?,
+            seoTitle = ?,
+            seoDescription = ?,
+            canonicalUrl = ?,
+            aeoSummary = ?,
+            aeoKeyFacts = ?,
+            geoEntities = ?,
+            schemaJsonLd = ?,
             privacy = ?,
             status = ?,
             views = ?,
@@ -1021,13 +1360,20 @@ export default {
             updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).bind(
-          body.title !== undefined ? body.title : existing.title,
-          body.description !== undefined ? body.description : existing.description,
-          body.duration !== undefined ? body.duration : existing.duration,
-          body.category !== undefined ? body.category : existing.category,
-          toSqlString(body.tags !== undefined ? body.tags : existing.tags),
-          body.thumbnail !== undefined ? body.thumbnail : existing.thumbnail,
-          body.videoUrl !== undefined ? body.videoUrl : existing.videoUrl,
+          nextTitle,
+          nextDesc,
+          nextDur,
+          finalCategory,
+          toSqlString(finalTagsArr),
+          nextThumb,
+          nextVideoUrl,
+          body.seoTitle || autoMeta.seoTitle,
+          body.seoDescription || autoMeta.seoDescription,
+          body.canonicalUrl || autoMeta.canonicalUrl,
+          toSqlString(body.aeoSummary || autoMeta.aeoSummary),
+          toSqlString(body.aeoKeyFacts || autoMeta.aeoKeyFacts),
+          toSqlString(body.geoEntities && body.geoEntities.length ? body.geoEntities : autoMeta.geoEntities),
+          toSqlString(body.schemaJsonLd || autoMeta.schemaJsonLd),
           privacy,
           status,
           viewsToSet,
@@ -1045,6 +1391,7 @@ export default {
         ).run();
 
         videosMemoryCache.clear();
+        tagsMemoryCache = { data: null, timestamp: 0 };
 
         const updated = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
         return json({
@@ -1600,6 +1947,26 @@ export default {
           backupUrl = null;
         }
 
+        const autoMeta = buildVideoSeoAeoGeoAndTaxonomy({
+          id,
+          title: body.title,
+          description: body.description || '',
+          duration: body.duration || '',
+          category: body.category || 'General',
+          tags: body.tags || [],
+          thumbnail: finalThumbnail,
+          videoUrl: finalVideoUrl,
+          views: initialViews,
+          created_at: body.isCustomDateTime && body.created_at ? body.created_at : undefined
+        }, false);
+
+        const resolvedCategory = (body.category && String(body.category).trim() && String(body.category).trim().toLowerCase() !== 'general')
+          ? String(body.category).trim()
+          : autoMeta.category;
+        const resolvedTags = (Array.isArray(body.tags) && body.tags.length > 0)
+          ? Array.from(new Set([...body.tags.map(t => String(t).trim()).filter(Boolean), ...autoMeta.tags])).slice(0, 7)
+          : autoMeta.tags;
+
         const allCandidateFields = {
           id,
           title: body.title,
@@ -1609,21 +1976,21 @@ export default {
           likes: initialLikes,
           dislikes: Number(body.dislikes || 0),
           rating: Number(body.rating || 95),
-          category: body.category || 'General',
-          tags: toSqlString(body.tags || []),
+          category: resolvedCategory,
+          tags: toSqlString(resolvedTags),
           uploadedAt: body.uploadedAt || 'Just now',
           author: body.author || 'VIRALKAAM Admin',
           thumbnail: finalThumbnail,
           videoUrl: finalVideoUrl,
           hlsUrl: body.hlsUrl || null,
           embedUrl: body.embedUrl || null,
-          seoTitle: body.seoTitle || null,
-          seoDescription: body.seoDescription || null,
-          canonicalUrl: body.canonicalUrl || null,
-          aeoSummary: toSqlString(body.aeoSummary),
-          aeoKeyFacts: toSqlString(body.aeoKeyFacts),
-          geoEntities: toSqlString(body.geoEntities || []),
-          schemaJsonLd: toSqlString(body.schemaJsonLd),
+          seoTitle: body.seoTitle || autoMeta.seoTitle,
+          seoDescription: body.seoDescription || autoMeta.seoDescription,
+          canonicalUrl: body.canonicalUrl || autoMeta.canonicalUrl,
+          aeoSummary: toSqlString(body.aeoSummary || autoMeta.aeoSummary),
+          aeoKeyFacts: toSqlString(body.aeoKeyFacts || autoMeta.aeoKeyFacts),
+          geoEntities: toSqlString((Array.isArray(body.geoEntities) && body.geoEntities.length > 0) ? body.geoEntities : autoMeta.geoEntities),
+          schemaJsonLd: toSqlString(body.schemaJsonLd || autoMeta.schemaJsonLd),
           status,
           privacy,
           initial_views: initialViews,
@@ -1649,10 +2016,17 @@ export default {
           }
         }
 
-        // Filter to only columns that actually exist in the table
+        // Auto-register category into categories table
+        if (resolvedCategory) {
+          const catSlug = resolvedCategory.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          try {
+            await env.DB.prepare('INSERT OR IGNORE INTO categories (name, slug) VALUES (?, ?)').bind(resolvedCategory, catSlug).run();
+          } catch {}
+        }
+
         // Auto-register new tags into tags table
-        if (Array.isArray(body.tags)) {
-          for (const t of body.tags) {
+        if (Array.isArray(resolvedTags)) {
+          for (const t of resolvedTags) {
             const cleanT = String(t).trim();
             if (cleanT) {
               const tSlug = cleanT.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -1662,6 +2036,7 @@ export default {
             }
           }
         }
+        tagsMemoryCache = { data: null, timestamp: 0 };
 
         const insertCols = availableCols.size > 0 
           ? Object.keys(allCandidateFields).filter(c => availableCols.has(c))

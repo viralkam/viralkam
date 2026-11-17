@@ -402,16 +402,16 @@ export const api = {
   },
 
   /**
-   * Fetch Categories with counts
+   * Fetch Categories with counts (strictly from Admin Panel / Database)
    */
   async getCategories() {
     try {
       const res = await fetch(`${API_BASE}/categories`);
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       const data = await res.json();
-      return data.categories || [];
+      return Array.isArray(data.categories) ? data.categories : [];
     } catch {
-      return CATEGORIES.map((c, i) => ({ id: i + 1, name: c, slug: c.toLowerCase(), count: 0 }));
+      return [];
     }
   },
 
@@ -474,25 +474,17 @@ export const api = {
   },
 
   /**
-   * Fetch all tags with video counts
+   * Fetch all tags with video counts (strictly from Admin Panel / Database)
    */
-  async getTags() {
+  async getTags(forceRefresh = false) {
     try {
-      const res = await fetch(`${API_BASE}/tags`);
+      const qs = forceRefresh ? '?refresh=1' : '';
+      const res = await fetch(`${API_BASE}/tags${qs}`);
       if (!res.ok) throw new Error('Failed to fetch tags');
       const data = await res.json();
-      return data.tags || [];
+      return Array.isArray(data.tags) ? data.tags : [];
     } catch {
-      return [
-        { id: 1, name: 'Trending', slug: 'trending', count: 0 },
-        { id: 2, name: 'Desi', slug: 'desi', count: 0 },
-        { id: 3, name: 'Viral', slug: 'viral', count: 0 },
-        { id: 4, name: 'MMS', slug: 'mms', count: 0 },
-        { id: 5, name: 'Bhabhi', slug: 'bhabhi', count: 0 },
-        { id: 6, name: 'Romance', slug: 'romance', count: 0 },
-        { id: 7, name: 'College', slug: 'college', count: 0 },
-        { id: 8, name: 'HD', slug: 'hd', count: 0 }
-      ];
+      return [];
     }
   },
 
@@ -568,6 +560,26 @@ export const api = {
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.message || 'Failed to clear dummy data');
+    }
+    return data;
+  },
+
+  /**
+   * Auto-optimize all videos in batches: generate SEO, AEO, GEO + Categories & Tags from titles
+   */
+  async autoOptimizeAllVideos({ offset = 0, limit = 120, forceReclassify = true } = {}) {
+    const token = this.getAdminToken();
+    const res = await fetch(`${API_BASE}/admin/auto-optimize-all`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ offset, limit, forceReclassify })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to auto-optimize videos');
     }
     return data;
   },

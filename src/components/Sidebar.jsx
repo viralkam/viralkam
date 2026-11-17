@@ -26,7 +26,8 @@ export default function Sidebar({
           {filterOptions.map((item) => (
             <li key={item.id}>
               <button
-                className={`sidebar-link ${activeFilter === item.id ? "active" : ""}`}
+                type="button"
+                className={`sidebar-link ${!activeCategory && !activeTag && activeFilter === item.id ? "active" : ""}`}
                 onClick={() => {
                   setActiveFilter(item.id);
                   onResetToHome();
@@ -39,36 +40,40 @@ export default function Sidebar({
         </ul>
       </div>
 
-      <div className="sidebar-section">
-        <h3 className="sidebar-heading">Categories</h3>
-        <ul className="sidebar-menu">
-          {categories.map((cat) => (
-            <li key={cat}>
+      {categories && categories.length > 0 && (
+        <div className="sidebar-section">
+          <h3 className="sidebar-heading">Categories</h3>
+          <ul className="sidebar-menu">
+            {categories.map((cat) => (
+              <li key={cat}>
+                <button
+                  type="button"
+                  className={`sidebar-link ${activeCategory === cat ? "active" : ""}`}
+                  onClick={() => {
+                    setActiveCategory(cat);
+                    onResetToHome();
+                  }}
+                >
+                  {cat}
+                </button>
+              </li>
+            ))}
+            <li>
               <button
-                className={`sidebar-link ${activeCategory === cat ? "active" : ""}`}
+                type="button"
+                className="sidebar-see-all-link"
                 onClick={() => {
-                  setActiveCategory(cat);
+                  setActiveCategory(null);
+                  if (onSelectTag) onSelectTag(null);
                   onResetToHome();
                 }}
               >
-                {cat}
+                See all categories &gt;
               </button>
             </li>
-          ))}
-          <li>
-            <button
-              className="sidebar-see-all-link"
-              onClick={() => {
-                setActiveCategory(null);
-                if (onSelectTag) onSelectTag(null);
-                onResetToHome();
-              }}
-            >
-              See all categories &gt;
-            </button>
-          </li>
-        </ul>
-      </div>
+          </ul>
+        </div>
+      )}
 
       {tags && tags.length > 0 && (
         <div className="sidebar-section">
@@ -79,6 +84,7 @@ export default function Sidebar({
               return (
                 <li key={name}>
                   <button
+                    type="button"
                     className={`sidebar-link ${activeTag === name ? "active" : ""}`}
                     onClick={() => {
                       if (onSelectTag) onSelectTag(name);

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Search, Menu, X, Settings, Home, Folder, Tag, Flame, Clock, Award } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Search, Menu, X } from "lucide-react";
 
 export default function Navbar({
   searchQuery,
@@ -7,9 +7,11 @@ export default function Navbar({
   onNavigateHome,
   onOpenAdmin,
   isAdminActive,
-  categories,
+  categories = [],
+  activeCategory = null,
   onSelectCategory,
   tags = [],
+  activeTag = null,
   onSelectTag,
   activeFilter,
   setActiveFilter
@@ -18,6 +20,7 @@ export default function Navbar({
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showCategoriesDropdown, setShowCategoriesDropdown] = useState(false);
   const [showTagsDropdown, setShowTagsDropdown] = useState(false);
+  const navRef = useRef(null);
 
   const filterOptions = [
     { id: "newest", label: "Newest" },
@@ -27,16 +30,46 @@ export default function Navbar({
     { id: "random", label: "Random" }
   ];
 
+  // Close desktop dropdowns on outside click / tap
+  useEffect(() => {
+    const handleOutside = (e) => {
+      if (navRef.current && !navRef.current.contains(e.target)) {
+        setShowCategoriesDropdown(false);
+        setShowTagsDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, []);
+
+  // Prevent background body scroll when mobile drawer is open
+  useEffect(() => {
+    if (showMobileMenu) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [showMobileMenu]);
+
   return (
-    <header className="site-header">
+    <header className="site-header" ref={navRef}>
       <div className="header-inner">
         {/* Logo / Branding */}
-        <div 
-          className="site-branding" 
+        <div
+          className="site-branding"
           onClick={() => {
             onNavigateHome();
             setShowMobileMenu(false);
-          }} 
+            setShowCategoriesDropdown(false);
+            setShowTagsDropdown(false);
+          }}
           title="Go to Home"
         >
           <h1 className="site-title">VIRALKAAM.COM</h1>
@@ -58,6 +91,7 @@ export default function Navbar({
                     if (cleanVal === "/adminenable" || cleanVal === "/admin") {
                       setSearchQuery("");
                       setShowSearchInput(false);
+                      setShowMobileMenu(false);
                       onOpenAdmin();
                     } else {
                       setSearchQuery(val);
@@ -70,6 +104,7 @@ export default function Navbar({
                         e.preventDefault();
                         setSearchQuery("");
                         setShowSearchInput(false);
+                        setShowMobileMenu(false);
                         onOpenAdmin();
                       }
                     }
@@ -77,6 +112,7 @@ export default function Navbar({
                   autoFocus
                 />
                 <button
+                  type="button"
                   className="search-close-x"
                   onClick={() => {
                     setShowSearchInput(false);
@@ -88,9 +124,14 @@ export default function Navbar({
               </div>
             ) : (
               <button
+                type="button"
                 className="header-icon-btn search-toggle"
-                onClick={() => setShowSearchInput(true)}
+                onClick={() => {
+                  setShowSearchInput(true);
+                  setShowMobileMenu(false);
+                }}
                 title="Search"
+                aria-label="Open Search"
               >
                 <Search size={22} />
               </button>
@@ -102,25 +143,36 @@ export default function Navbar({
             {/* Categories Dropdown */}
             <div className="nav-dropdown-wrapper">
               <button
+                type="button"
                 className="nav-text-link"
-                onClick={() => setShowCategoriesDropdown(!showCategoriesDropdown)}
+                onClick={() => {
+                  setShowCategoriesDropdown((prev) => !prev);
+                  setShowTagsDropdown(false);
+                }}
               >
                 Categories
               </button>
               {showCategoriesDropdown && (
                 <div className="categories-menu-dropdown">
-                  {categories.map((cat) => (
-                    <button
-                      key={cat}
-                      className="cat-dropdown-item"
-                      onClick={() => {
-                        onSelectCategory(cat);
-                        setShowCategoriesDropdown(false);
-                      }}
-                    >
-                      {cat}
-                    </button>
-                  ))}
+                  {categories.length > 0 ? (
+                    categories.map((cat) => (
+                      <button
+                        type="button"
+                        key={cat}
+                        className={`cat-dropdown-item ${activeCategory === cat ? "active" : ""}`}
+                        onClick={() => {
+                          onSelectCategory(cat);
+                          setShowCategoriesDropdown(false);
+                        }}
+                      >
+                        {cat}
+                      </button>
+                    ))
+                  ) : (
+                    <div style={{ padding: "8px 12px", color: "#94a3b8", fontSize: "0.8rem" }}>
+                      No categories in Admin Panel
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -128,9 +180,10 @@ export default function Navbar({
             {/* Tags Dropdown */}
             <div className="nav-dropdown-wrapper">
               <button
+                type="button"
                 className="nav-text-link"
                 onClick={() => {
-                  setShowTagsDropdown(!showTagsDropdown);
+                  setShowTagsDropdown((prev) => !prev);
                   setShowCategoriesDropdown(false);
                 }}
               >
@@ -143,8 +196,9 @@ export default function Navbar({
                       const name = typeof t === "string" ? t : t.name;
                       return (
                         <button
+                          type="button"
                           key={name}
-                          className="cat-dropdown-item"
+                          className={`cat-dropdown-item ${activeTag === name ? "active" : ""}`}
                           onClick={() => {
                             if (onSelectTag) onSelectTag(name);
                             setShowTagsDropdown(false);
@@ -155,8 +209,8 @@ export default function Navbar({
                       );
                     })
                   ) : (
-                    <div style={{ padding: "8px 12px", color: "#64748b", fontSize: "0.8rem" }}>
-                      No tags available
+                    <div style={{ padding: "8px 12px", color: "#94a3b8", fontSize: "0.8rem" }}>
+                      No tags in Admin Panel
                     </div>
                   )}
                 </div>
@@ -165,80 +219,103 @@ export default function Navbar({
 
             {/* Home Black Pill */}
             <button
+              type="button"
               className={`nav-pill-btn home-pill ${!isAdminActive ? "active" : ""}`}
-              onClick={onNavigateHome}
+              onClick={() => {
+                onNavigateHome();
+                setShowCategoriesDropdown(false);
+                setShowTagsDropdown(false);
+              }}
             >
               Home
             </button>
           </nav>
 
-          {/* Mobile Hamburger Button (Exact as Screenshot 1) */}
+          {/* Mobile Hamburger Button */}
           <button
+            type="button"
             className="mobile-hamburger-btn"
-            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowMobileMenu((prev) => !prev);
+            }}
             aria-label="Toggle Navigation Menu"
+            aria-expanded={showMobileMenu}
           >
             {showMobileMenu ? <X size={26} /> : <Menu size={26} />}
           </button>
         </div>
       </div>
 
-      {/* Mobile Drawer Dropdown Menu */}
+      {/* Mobile Full-Overlay Backdrop + Scrollable Drawer Menu */}
       {showMobileMenu && (
-        <div className="mobile-nav-drawer">
-          <ul className="mobile-menu-list">
-            <li>
-              <button 
-                className="mobile-drawer-link highlight"
-                onClick={() => {
-                  onNavigateHome();
-                  setShowMobileMenu(false);
-                }}
-              >
-                Home
-              </button>
-            </li>
-
-            <li className="mobile-menu-divider">Filters</li>
-            {filterOptions.map((f) => (
-              <li key={f.id}>
+        <>
+          <div
+            className="mobile-drawer-backdrop"
+            onClick={() => setShowMobileMenu(false)}
+          />
+          <nav className="mobile-nav-drawer" aria-label="Mobile Navigation">
+            <ul className="mobile-menu-list">
+              <li>
                 <button
-                  className={`mobile-drawer-link ${activeFilter === f.id ? "active-filter" : ""}`}
+                  type="button"
+                  className={`mobile-drawer-link highlight ${!activeCategory && !activeTag && activeFilter === "newest" ? "active-filter" : ""}`}
                   onClick={() => {
-                    if (setActiveFilter) setActiveFilter(f.id);
                     onNavigateHome();
                     setShowMobileMenu(false);
                   }}
                 >
-                  {f.label}
+                  Home
                 </button>
               </li>
-            ))}
 
-            <li className="mobile-menu-divider">Categories</li>
-            {categories.map((cat) => (
-              <li key={cat}>
-                <button
-                  className="mobile-drawer-link"
-                  onClick={() => {
-                    onSelectCategory(cat);
-                    setShowMobileMenu(false);
-                  }}
-                >
-                  {cat}
-                </button>
-              </li>
-            ))}
+              <li className="mobile-menu-divider">Sort &amp; Filters</li>
+              {filterOptions.map((f) => (
+                <li key={f.id}>
+                  <button
+                    type="button"
+                    className={`mobile-drawer-link ${!activeCategory && !activeTag && activeFilter === f.id ? "active-filter" : ""}`}
+                    onClick={() => {
+                      if (setActiveFilter) setActiveFilter(f.id);
+                      setShowMobileMenu(false);
+                    }}
+                  >
+                    {f.label}
+                  </button>
+                </li>
+              ))}
 
-            {tags.length > 0 && (
-              <>
-                <li className="mobile-menu-divider">Tags</li>
-                {tags.map((t) => {
+              <li className="mobile-menu-divider">Categories ({categories.length})</li>
+              {categories.length > 0 ? (
+                categories.map((cat) => (
+                  <li key={cat}>
+                    <button
+                      type="button"
+                      className={`mobile-drawer-link ${activeCategory === cat ? "active-filter" : ""}`}
+                      onClick={() => {
+                        onSelectCategory(cat);
+                        setShowMobileMenu(false);
+                      }}
+                    >
+                      {cat}
+                    </button>
+                  </li>
+                ))
+              ) : (
+                <li style={{ padding: "8px 1.5rem", color: "rgba(255,255,255,0.6)", fontSize: "0.85rem" }}>
+                  No categories added in Admin Panel
+                </li>
+              )}
+
+              <li className="mobile-menu-divider">Tags ({tags.length})</li>
+              {tags.length > 0 ? (
+                tags.map((t) => {
                   const name = typeof t === "string" ? t : t.name;
                   return (
                     <li key={name}>
                       <button
-                        className="mobile-drawer-link"
+                        type="button"
+                        className={`mobile-drawer-link ${activeTag === name ? "active-filter" : ""}`}
                         onClick={() => {
                           if (onSelectTag) onSelectTag(name);
                           setShowMobileMenu(false);
@@ -248,11 +325,15 @@ export default function Navbar({
                       </button>
                     </li>
                   );
-                })}
-              </>
-            )}
-          </ul>
-        </div>
+                })
+              ) : (
+                <li style={{ padding: "8px 1.5rem", color: "rgba(255,255,255,0.6)", fontSize: "0.85rem" }}>
+                  No tags added in Admin Panel
+                </li>
+              )}
+            </ul>
+          </nav>
+        </>
       )}
     </header>
   );

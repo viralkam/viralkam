@@ -40,7 +40,7 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 1000;
 }
 
 .header-inner {
@@ -49,6 +49,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: relative;
+  z-index: 1002;
+  background-color: var(--site-blue);
 }
 
 /* Site Branding Logo */
@@ -85,16 +88,38 @@ body {
   border: none;
   color: var(--text-white);
   cursor: pointer;
-  padding: 4px;
+  padding: 8px;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  z-index: 1005;
+}
+
+/* Mobile Full-Overlay Backdrop */
+.mobile-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 9998;
+  touch-action: manipulation;
 }
 
 /* Mobile Dropdown Drawer */
 .mobile-nav-drawer {
-  background: #005677;
-  border-top: 1px solid rgba(0, 0, 0, 0.25);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  max-height: 80vh;
+  position: fixed;
+  top: 58px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #004e6b;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  z-index: 9999;
+  padding-bottom: 40px;
 }
 
 .mobile-menu-list {
@@ -106,19 +131,22 @@ body {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 11px 1.5rem;
+  padding: 13px 1.5rem;
   background: transparent;
   border: none;
   color: #ffffff;
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   font-weight: 500;
   cursor: pointer;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(255, 255, 255, 0.15);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .mobile-drawer-link:hover, .mobile-drawer-link.active-filter {
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.35);
   font-weight: 700;
+  color: #38bdf8;
 }
 
 .mobile-drawer-link.highlight {
