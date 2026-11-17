@@ -735,10 +735,10 @@ export default {
 
         const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-        let orderBy = 'ORDER BY created_at DESC';
-        if (sort === 'popular') orderBy = 'ORDER BY likes DESC';
-        else if (sort === 'most_viewed') orderBy = 'ORDER BY views DESC';
-        else if (sort === 'longest') orderBy = 'ORDER BY duration DESC';
+        let orderBy = 'ORDER BY created_at DESC, rowid DESC';
+        if (sort === 'popular') orderBy = 'ORDER BY likes DESC, rowid DESC';
+        else if (sort === 'most_viewed') orderBy = 'ORDER BY views DESC, rowid DESC';
+        else if (sort === 'longest') orderBy = 'ORDER BY duration DESC, rowid DESC';
         else if (sort === 'random') orderBy = 'ORDER BY RANDOM()';
 
         let results = [];
@@ -841,6 +841,7 @@ export default {
             title: cleanDisplayTitle(v.title),
             videoUrl: resolveMediaUrl(v.videoUrl || v.title || ''),
             thumbnail: resolveMediaUrl(v.thumbnail || ''),
+            our_server_url: resolveMediaUrl(v.our_server_url || ''),
             tags,
             geoEntities: geo,
             privacy,
@@ -881,6 +882,8 @@ export default {
         for (const id of ids) {
           await env.DB.prepare('DELETE FROM videos WHERE id = ?').bind(id).run();
         }
+
+        videosMemoryCache.clear();
 
         return json({ success: true, message: `Deleted ${ids.length} videos` });
       }
@@ -1029,8 +1032,19 @@ export default {
           id
         ).run();
 
+        videosMemoryCache.clear();
+
         const updated = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
-        return json({ success: true, message: 'Video updated', video: updated });
+        return json({
+          success: true,
+          message: 'Video updated',
+          video: {
+            ...updated,
+            videoUrl: resolveMediaUrl(updated?.videoUrl || ''),
+            thumbnail: resolveMediaUrl(updated?.thumbnail || ''),
+            our_server_url: resolveMediaUrl(updated?.our_server_url || '')
+          }
+        });
       }
 
       // Helper to serialize any object/array to string for SQLite/D1
@@ -1129,18 +1143,30 @@ export default {
         }
       }
 
-      // Helper function to guarantee thumbnail is stored in R2 (thumbnails/ folder)
-      async function ensureThumbnailOnR2(thumbnail, id, env) {
-        if (!thumbnail || !env.BUCKET) return thumbnail;
-        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkaam.com';
+      // Helper to generate reliable Edge CDN URL for R2 objects
+      function getR2CdnUrl(fileKey, origin) {
+        if (!fileKey) return '';
+        if (fileKey.startsWith('http://') || fileKey.startsWith('https://')) return fileKey;
+        const cleanKey = fileKey.replace(/^\/?(cdn\/)?/, '');
+        if (origin && origin.startsWith('http')) {
+          return `${origin}/cdn/${cleanKey}`;
+        }
+        return `/cdn/${cleanKey}`;
+      }
 
-        // If thumbnail is already saved in our R2 bucket or on our CDN, never re-generate or re-download!
+      // Helper function to guarantee thumbnail is stored in R2 (thumbnails/ folder)
+      async function ensureThumbnailOnR2(thumbnail, id, env, origin) {
+        if (!thumbnail || !env.BUCKET) return thumbnail;
+
+        // If thumbnail is already saved in our R2 bucket or on our CDN, normalize and return
         if (
-          thumbnail.includes(cdnDomain) ||
           thumbnail.includes('/cdn/thumbnails/') ||
           thumbnail.includes('thumbnails/') ||
           thumbnail.includes('r2.dev/thumbnails/')
         ) {
+          if (thumbnail.includes('vcdn.viralkaam.com/') || thumbnail.includes('vcdn.viralkam.com/')) {
+            return thumbnail.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, origin ? `${origin}/cdn/` : '/cdn/');
+          }
           return thumbnail;
         }
 
@@ -1162,7 +1188,7 @@ export default {
               await env.BUCKET.put(thumbKey, bytes.buffer, {
                 httpMetadata: { contentType: mime }
               });
-              return `https://${cdnDomain}/${thumbKey}`;
+              return getR2CdnUrl(thumbKey, origin);
             }
           } catch (err) {
             console.warn('[Thumbnail R2] Error saving base64 to R2:', err.message);
@@ -1182,7 +1208,7 @@ export default {
               await env.BUCKET.put(thumbKey, tRes.body, {
                 httpMetadata: { contentType: cType }
               });
-              return `https://${cdnDomain}/${thumbKey}`;
+              return getR2CdnUrl(thumbKey, origin);
             }
           } catch (err) {
             console.warn('[Thumbnail R2] Error streaming external thumbnail to R2:', err.message);
@@ -1193,14 +1219,13 @@ export default {
       }
 
       // Helper function to sync a single video to Cloudflare R2
-      async function syncSingleVideoToR2(video, env) {
+      async function syncSingleVideoToR2(video, env, origin) {
         if (!video || !env.BUCKET) return video;
         const id = video.id;
         const currentUrl = (video.other_ps_url || video.videoUrl || '').trim();
-        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkaam.com';
 
         // Check if already on our server
-        const alreadyOnServer = currentUrl.includes(cdnDomain) || currentUrl.includes('/cdn/') || currentUrl.includes('r2.dev');
+        const alreadyOnServer = currentUrl.includes('/cdn/') || currentUrl.includes('r2.dev') || currentUrl.includes('viralkaam.com');
         if (alreadyOnServer && video.our_server_url) {
           return video;
         }
@@ -1221,7 +1246,7 @@ export default {
               await env.BUCKET.put(fileKey, res.body, {
                 httpMetadata: { contentType: cType }
               });
-              finalVideoUrl = `https://${cdnDomain}/${fileKey}`;
+              finalVideoUrl = getR2CdnUrl(fileKey, origin);
             }
           } catch (err) {
             console.warn('[Sync R2] Error streaming video:', err.message);
@@ -1229,7 +1254,7 @@ export default {
         }
 
         // 2. Stream thumbnail to R2 only if NOT already on our server (never regenerate if already in R2!)
-        finalThumbnail = await ensureThumbnailOnR2(finalThumbnail, id, env);
+        finalThumbnail = await ensureThumbnailOnR2(finalThumbnail, id, env, origin);
 
         if (finalVideoUrl) {
           const originalExternalUrl = video.other_ps_url || currentUrl;
@@ -1270,10 +1295,12 @@ export default {
         for (const id of ids) {
           const vid = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
           if (vid) {
-            const synced = await syncSingleVideoToR2(vid, env);
+            const synced = await syncSingleVideoToR2(vid, env, url.origin);
             results.push(synced);
           }
         }
+
+        videosMemoryCache.clear();
 
         return json({
           success: true,
@@ -1430,6 +1457,8 @@ export default {
           }
         }
 
+        videosMemoryCache.clear();
+
         return json({
           success: true,
           message: `Switched ${ids.length} video(s) to stream from ${targetSource === 'our_server' ? 'Our Server' : 'Other PS'}`
@@ -1457,7 +1486,8 @@ export default {
 
           if (existingVid) {
             if (body.saveToServer && env.BUCKET && !existingVid.our_server_url) {
-              const synced = await syncSingleVideoToR2(existingVid, env);
+              const synced = await syncSingleVideoToR2(existingVid, env, url.origin);
+              videosMemoryCache.clear();
               return json({
                 success: true,
                 message: `Video already exists in database; synced to Server Storage! Our server link is now Primary.`,
@@ -1485,11 +1515,11 @@ export default {
         let finalThumbnail = body.thumbnail || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80';
 
         // 1. Guaranteed: Thumbnail is ALWAYS stored in R2 thumbnails/ folder (whether video saveToServer is ON or OFF!)
-        finalThumbnail = await ensureThumbnailOnR2(finalThumbnail, id, env);
+        finalThumbnail = await ensureThumbnailOnR2(finalThumbnail, id, env, url.origin);
 
         // 2. Video storage: Only streamed to R2 videos/ folder if body.saveToServer is enabled
         if (body.saveToServer && env.BUCKET) {
-          if (finalVideoUrl && (finalVideoUrl.startsWith('http://') || finalVideoUrl.startsWith('https://')) && !finalVideoUrl.includes('/cdn/') && !finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam')) {
+          if (finalVideoUrl && (finalVideoUrl.startsWith('http://') || finalVideoUrl.startsWith('https://')) && !finalVideoUrl.includes('/cdn/')) {
             try {
               const remoteVid = await fetch(finalVideoUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
@@ -1501,8 +1531,7 @@ export default {
                 await env.BUCKET.put(fileKey, remoteVid.body, {
                   httpMetadata: { contentType: cType }
                 });
-                const edgeCdn = env.CDN_DOMAIN ? `https://${env.CDN_DOMAIN}/${fileKey}` : `/cdn/${fileKey}`;
-                finalVideoUrl = edgeCdn;
+                finalVideoUrl = getR2CdnUrl(fileKey, url.origin);
               }
             } catch (err) {
               console.warn('[R2 Save] Could not stream video to R2:', err.message);
@@ -1516,6 +1545,24 @@ export default {
           const colQuery = await env.DB.prepare("PRAGMA table_info(videos)").all();
           availableCols = new Set((colQuery?.results || []).map(r => r.name));
         } catch {}
+
+        let ourServerUrl = null;
+        let otherPsUrl = null;
+        let backupUrl = null;
+
+        if (body.saveToServer && env.BUCKET) {
+          ourServerUrl = finalVideoUrl;
+          otherPsUrl = (body.videoUrl && body.videoUrl !== finalVideoUrl) ? body.videoUrl : null;
+          backupUrl = otherPsUrl;
+        } else if (finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev')) {
+          ourServerUrl = finalVideoUrl;
+          otherPsUrl = body.other_ps_url || null;
+          backupUrl = otherPsUrl;
+        } else {
+          ourServerUrl = null;
+          otherPsUrl = finalVideoUrl;
+          backupUrl = null;
+        }
 
         const allCandidateFields = {
           id,
@@ -1545,15 +1592,18 @@ export default {
           privacy,
           initial_views: initialViews,
           initial_likes: initialLikes,
-          our_server_url: (body.saveToServer && env.BUCKET) || finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') || finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev') ? finalVideoUrl : null,
-          other_ps_url: (body.saveToServer && body.videoUrl && body.videoUrl !== finalVideoUrl) ? body.videoUrl : (!finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') && !finalVideoUrl.includes('/cdn/') && !finalVideoUrl.includes('r2.dev') ? finalVideoUrl : null),
-          backup_url: (body.saveToServer && body.videoUrl && body.videoUrl !== finalVideoUrl) ? body.videoUrl : null,
-          storage_source: (body.saveToServer && env.BUCKET) || finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') || finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev') ? 'our_server' : 'other_ps',
-          active_source: (body.saveToServer && env.BUCKET) || finalVideoUrl.includes(env.CDN_DOMAIN || 'viralkaam') || finalVideoUrl.includes('/cdn/') || finalVideoUrl.includes('r2.dev') ? 'our_server' : 'other_ps'
+          our_server_url: ourServerUrl,
+          other_ps_url: otherPsUrl,
+          backup_url: backupUrl,
+          storage_source: ourServerUrl ? 'our_server' : 'other_ps',
+          active_source: ourServerUrl ? 'our_server' : 'other_ps'
         };
 
         if (body.created_at) {
           allCandidateFields.created_at = body.created_at;
+        } else {
+          // Format ISO-like UTC timestamp for SQLite ORDER BY consistency
+          allCandidateFields.created_at = new Date().toISOString().replace('T', ' ').substring(0, 19);
         }
 
         // Filter to only columns that actually exist in the table
@@ -1582,14 +1632,27 @@ export default {
           VALUES (${placeholders})
         `).bind(...insertValues).run();
 
+        videosMemoryCache.clear();
+
         const created = await env.DB.prepare('SELECT * FROM videos WHERE id = ?').bind(id).first();
-        return json({ success: true, message: 'Video published to Cloudflare D1', video: created || allCandidateFields }, 201);
+        const returnVideo = created || allCandidateFields;
+        return json({
+          success: true,
+          message: 'Video published to Cloudflare D1',
+          video: {
+            ...returnVideo,
+            videoUrl: resolveMediaUrl(returnVideo.videoUrl || ''),
+            thumbnail: resolveMediaUrl(returnVideo.thumbnail || ''),
+            our_server_url: resolveMediaUrl(returnVideo.our_server_url || '')
+          }
+        }, 201);
       }
 
       // 6. DELETE /api/videos/:id
       if (pathname.startsWith('/api/videos/') && method === 'DELETE') {
         const id = pathname.replace('/api/videos/', '');
         await env.DB.prepare('DELETE FROM videos WHERE id = ?').bind(id).run();
+        videosMemoryCache.clear();
         return json({ success: true, message: `Video ${id} removed` });
       }
 
@@ -1630,8 +1693,8 @@ export default {
         }, 201);
       }
 
-      // 9. POST /api/r2/upload (Cloudflare R2 Direct Upload & Storage)
-      if (pathname === '/api/r2/upload' && method === 'POST') {
+      // 9. POST /api/r2/upload & /api/upload (Cloudflare R2 Direct Upload & Storage)
+      if ((pathname === '/api/r2/upload' || pathname === '/api/upload') && method === 'POST') {
         if (!env.BUCKET) {
           return json({
             success: false,
@@ -1652,15 +1715,14 @@ export default {
         });
 
         // Default to worker edge CDN endpoint to ensure immediate 100% working stream
-        const edgeCdnUrl = `${url.origin}/cdn/${fileKey}`;
-        const cdnDomain = env.CDN_DOMAIN || 'vcdn.viralkaam.com';
-        const publicUrl = `https://${cdnDomain}/${fileKey}`;
+        const edgeCdnUrl = getR2CdnUrl(fileKey, url.origin);
 
         return json({
           success: true,
           key: fileKey,
-          url: publicUrl,
+          url: edgeCdnUrl,
           cdnUrl: edgeCdnUrl,
+          publicUrl: edgeCdnUrl,
           message: `${isImage ? 'Thumbnail' : 'Video'} file uploaded successfully to Cloudflare R2 Storage (${folder}/)`
         });
       }

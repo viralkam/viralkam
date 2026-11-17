@@ -254,13 +254,16 @@ export default function App() {
   }, [refreshCategoriesAndTags]);
 
   const handleAddVideo = async (newVideo) => {
-    // 1. Strictly save to Cloudflare D1 / Database Storage
-    // Video is NOT saved in local storage - it goes directly to server database
-    const saved = await api.createVideo(newVideo);
-    const finalVideo = saved || newVideo;
+    // If AdminPanel already called api.createVideo, don't re-create it
+    let finalVideo = newVideo;
+    if (!newVideo.id || !newVideo.created_at) {
+      const saved = await api.createVideo(newVideo);
+      finalVideo = saved || newVideo;
+    }
 
-    // 2. Update React state immediately on platform
+    // Update React state immediately on platform
     setVideos((prev) => [finalVideo, ...prev.filter((v) => v.id !== finalVideo.id)]);
+    setTotalVideosCount((prev) => prev + 1);
 
     return finalVideo;
   };
