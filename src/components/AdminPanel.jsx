@@ -1879,11 +1879,11 @@ export default function AdminPanel({
 
         return {
           "Storage Type": safeExcelStr(isVideoOnOurServer(v) ? "Our Server (R2)" : "Other Person Storage (External)"),
-          "Primary URL": safeExcelStr(v.videoUrl || ""),
-          "Secondary URL": safeExcelStr(v.backup_url || v.other_ps_url || ""),
+          "Primary URL": safeExcelStr(cleanVideoUrl(v.videoUrl || "")),
+          "Secondary URL": safeExcelStr(cleanVideoUrl(v.backup_url || v.other_ps_url || "")),
           "Active Source": safeExcelStr((v.active_source === "other_ps" || (!v.our_server_url && !isVideoOnOurServer(v))) ? "Other PS" : "Our Server"),
           "Synced to Server": safeExcelStr((Boolean(v.our_server_url) || (v.storage_source === "our_server" && isVideoOnOurServer(v))) ? "YES" : "NO"),
-          "Video URL": safeExcelStr(v.videoUrl || ""),
+          "Video URL": safeExcelStr(cleanVideoUrl(v.videoUrl || "")),
           "Thumbnail URL": safeThumbnail,
           "Title": safeExcelStr(cleanDisplayTitle(v.title || "")),
           "Description": safeExcelStr(v.description || ""),
@@ -5952,8 +5952,8 @@ export default function AdminPanel({
                           const isSynced = isOtherPsSynced(v);
                           const isSelected = selectedOtherPsIds.includes(v.id);
                           const activeSource = v.active_source || (isSynced ? "our_server" : "other_ps");
-                          const primaryUrl = v.videoUrl || "";
-                          const secondaryUrl = v.backup_url || v.other_ps_url || "";
+                          const primaryUrl = cleanVideoUrl(v.videoUrl || "");
+                          const secondaryUrl = cleanVideoUrl(v.backup_url || v.other_ps_url || "");
 
                           return (
                             <tr key={v.id} style={{ background: isSelected ? "rgba(59, 130, 246, 0.04)" : "transparent" }}>

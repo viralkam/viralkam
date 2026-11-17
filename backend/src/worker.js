@@ -31,7 +31,7 @@ export default {
     }
 
     // 0. Direct Edge CDN Video & Media Streaming from R2 Storage (with Seeking & Range Support)
-    if ((pathname.startsWith('/cdn/') || pathname.startsWith('/api/media/')) && method === 'GET') {
+    if ((pathname.startsWith('/cdn/') || pathname.startsWith('/api/media/')) && (method === 'GET' || method === 'HEAD')) {
       if (!env.BUCKET) {
         return new Response(JSON.stringify({ success: false, message: 'Cloudflare R2 BUCKET not bound' }), {
           status: 404,
@@ -75,6 +75,11 @@ export default {
           else if (lowerKey.endsWith('.png')) headers.set('Content-Type', 'image/png');
           else if (lowerKey.endsWith('.webp')) headers.set('Content-Type', 'image/webp');
           else headers.set('Content-Type', 'video/mp4');
+        }
+
+        if (method === 'HEAD') {
+          headers.set('Content-Length', String(object.size));
+          return new Response(null, { headers, status: 200 });
         }
 
         if (object.range) {
@@ -699,9 +704,10 @@ export default {
         const sort = params.get('sort') || 'newest';
 
         // Check in-memory cache for public queries to avoid D1 row read explosion
+        const bypassCache = params.get('refresh') === '1' || request.headers.get('cache-control')?.includes('no-cache');
         const cacheKey = `${isAdmin ? 'admin' : 'pub'}_${page}_${limit}_${sort}_${category}_${tag}_${search}_${statusFilter}`;
         const cachedItem = videosMemoryCache.get(cacheKey);
-        if (cachedItem && (Date.now() - cachedItem.time < 60 * 1000) && !isAdmin) {
+        if (!bypassCache && cachedItem && (Date.now() - cachedItem.time < 30 * 1000) && !isAdmin) {
           return json(cachedItem.data);
         }
 
@@ -735,11 +741,12 @@ export default {
 
         const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-        let orderBy = 'ORDER BY created_at DESC, rowid DESC';
+        let orderBy = 'ORDER BY rowid DESC';
         if (sort === 'popular') orderBy = 'ORDER BY likes DESC, rowid DESC';
         else if (sort === 'most_viewed') orderBy = 'ORDER BY views DESC, rowid DESC';
         else if (sort === 'longest') orderBy = 'ORDER BY duration DESC, rowid DESC';
         else if (sort === 'random') orderBy = 'ORDER BY RANDOM()';
+        else if (sort === 'newest') orderBy = 'ORDER BY rowid DESC';
 
         let results = [];
         let totalVideos = 0;
@@ -842,6 +849,8 @@ export default {
             videoUrl: resolveMediaUrl(v.videoUrl || v.title || ''),
             thumbnail: resolveMediaUrl(v.thumbnail || ''),
             our_server_url: resolveMediaUrl(v.our_server_url || ''),
+            backup_url: resolveMediaUrl(v.backup_url || ''),
+            other_ps_url: resolveMediaUrl(v.other_ps_url || ''),
             tags,
             geoEntities: geo,
             privacy,
@@ -944,6 +953,9 @@ export default {
             title: cleanTitle(video.title),
             videoUrl: resolveMediaUrl(video.videoUrl || video.title || ''),
             thumbnail: resolveMediaUrl(video.thumbnail || ''),
+            our_server_url: resolveMediaUrl(video.our_server_url || ''),
+            backup_url: resolveMediaUrl(video.backup_url || ''),
+            other_ps_url: resolveMediaUrl(video.other_ps_url || ''),
             tags,
             privacy: video.privacy || (video.status === 'private' ? 'private' : 'public')
           }
@@ -1042,7 +1054,9 @@ export default {
             ...updated,
             videoUrl: resolveMediaUrl(updated?.videoUrl || ''),
             thumbnail: resolveMediaUrl(updated?.thumbnail || ''),
-            our_server_url: resolveMediaUrl(updated?.our_server_url || '')
+            our_server_url: resolveMediaUrl(updated?.our_server_url || ''),
+            backup_url: resolveMediaUrl(updated?.backup_url || ''),
+            other_ps_url: resolveMediaUrl(updated?.other_ps_url || '')
           }
         });
       }
@@ -1146,8 +1160,15 @@ export default {
       // Helper to generate reliable Edge CDN URL for R2 objects
       function getR2CdnUrl(fileKey, origin) {
         if (!fileKey) return '';
-        if (fileKey.startsWith('http://') || fileKey.startsWith('https://')) return fileKey;
-        const cleanKey = fileKey.replace(/^\/?(cdn\/)?/, '');
+        let k = String(fileKey).trim();
+        if (k.includes('vcdn.viralkaam.com/') || k.includes('vcdn.viralkam.com/')) {
+          k = k.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, '/cdn/');
+        }
+        if (k.includes('r2.dev/')) {
+          k = k.replace(/https?:\/\/[^\/]+r2\.dev\//, '/cdn/');
+        }
+        if (k.startsWith('http://') || k.startsWith('https://')) return k;
+        const cleanKey = k.replace(/^\/?(cdn\/)?/, '');
         if (origin && origin.startsWith('http')) {
           return `${origin}/cdn/${cleanKey}`;
         }
@@ -1164,10 +1185,17 @@ export default {
           thumbnail.includes('thumbnails/') ||
           thumbnail.includes('r2.dev/thumbnails/')
         ) {
-          if (thumbnail.includes('vcdn.viralkaam.com/') || thumbnail.includes('vcdn.viralkam.com/')) {
-            return thumbnail.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, origin ? `${origin}/cdn/` : '/cdn/');
+          let t = thumbnail;
+          if (t.includes('vcdn.viralkaam.com/') || t.includes('vcdn.viralkam.com/')) {
+            t = t.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, '/cdn/');
           }
-          return thumbnail;
+          if (t.includes('r2.dev/')) {
+            t = t.replace(/https?:\/\/[^\/]+r2\.dev\//, '/cdn/');
+          }
+          if (t.startsWith('/cdn/')) {
+            return origin ? `${origin}${t}` : t;
+          }
+          return t;
         }
 
         // Handle Base64 Data URI
@@ -1643,7 +1671,9 @@ export default {
             ...returnVideo,
             videoUrl: resolveMediaUrl(returnVideo.videoUrl || ''),
             thumbnail: resolveMediaUrl(returnVideo.thumbnail || ''),
-            our_server_url: resolveMediaUrl(returnVideo.our_server_url || '')
+            our_server_url: resolveMediaUrl(returnVideo.our_server_url || ''),
+            backup_url: resolveMediaUrl(returnVideo.backup_url || ''),
+            other_ps_url: resolveMediaUrl(returnVideo.other_ps_url || '')
           }
         }, 201);
       }

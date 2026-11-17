@@ -62,6 +62,11 @@ export function cleanVideoUrl(rawUrl, fallbackUrl = '') {
     u = u.replace(/https?:\/\/vcdn\.viralkaa?m\.com\//, '/cdn/');
   }
 
+  // If pointing to protected r2.dev domain, rewrite to edge CDN endpoint
+  if (u.includes('r2.dev/')) {
+    u = u.replace(/https?:\/\/[^\/]+r2\.dev\//, '/cdn/');
+  }
+
   // If running in browser and URL is a relative /cdn/ path, resolve to full origin URL
   if (typeof window !== 'undefined' && u.startsWith('/cdn/')) {
     u = `${window.location.origin}${u}`;
@@ -69,5 +74,7 @@ export function cleanVideoUrl(rawUrl, fallbackUrl = '') {
 
   return u || fallbackUrl;
 }
+
+export const cleanMediaUrl = cleanVideoUrl;
 
 export const FALLBACK_THUMBNAIL = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80';

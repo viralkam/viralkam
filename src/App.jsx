@@ -191,6 +191,7 @@ export default function App() {
     setSearchQuery("");
     window.history.pushState({}, "", "/");
     window.scrollTo({ top: 0, behavior: "smooth" });
+    loadData(1);
   };
 
   const handleSelectCategory = (cat) => {
