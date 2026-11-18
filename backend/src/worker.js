@@ -97,12 +97,242 @@ export default {
       }
     }
 
-    // Serve Frontend Static Assets if not an /api route (with SPA fallback)
-    if (!pathname.startsWith('/api') && !pathname.startsWith('/cdn/') && env.ASSETS) {
-      const assetRes = await env.ASSETS.fetch(request);
-      if (assetRes.status === 404) {
-        return env.ASSETS.fetch(new Request(new URL('/', request.url), request));
+    // 0.1 Dynamic robots.txt for Google, Bing, and AI Crawlers (SEO / AEO / GEO)
+    if (pathname === '/robots.txt' && (method === 'GET' || method === 'HEAD')) {
+      const robotsTxt = [
+        'User-agent: *',
+        'Allow: /',
+        'Disallow: /admin',
+        'Disallow: /adminenable',
+        'Disallow: /api/admin/',
+        '',
+        'User-agent: GPTBot',
+        'Allow: /',
+        '',
+        'User-agent: PerplexityBot',
+        'Allow: /',
+        '',
+        'User-agent: Google-Extended',
+        'Allow: /',
+        '',
+        `Sitemap: ${url.origin}/sitemap.xml`
+      ].join('\n');
+      return new Response(robotsTxt, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600'
+        }
+      });
+    }
+
+    // 0.2 Dynamic XML Video Sitemap (All published videos, categories & tags for Google Indexing)
+    if (pathname === '/sitemap.xml' && (method === 'GET' || method === 'HEAD')) {
+      const xmlEsc = (str) => String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+
+      try {
+        const [{ results: vids }, { results: cats }, { results: tagRows }] = await Promise.all([
+          env.DB.prepare(
+            "SELECT id, title, seoTitle, seoDescription, description, thumbnail, videoUrl, category, tags, created_at, updated_at FROM videos WHERE COALESCE(privacy, 'public') != 'private' AND COALESCE(status, 'published') != 'private' ORDER BY created_at DESC LIMIT 2000"
+          ).all(),
+          env.DB.prepare('SELECT name FROM categories ORDER BY name ASC').all(),
+          env.DB.prepare('SELECT name FROM tags ORDER BY name ASC').all()
+        ]);
+
+        const baseOrigin = url.origin;
+        const lines = [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">',
+          `  <url><loc>${xmlEsc(baseOrigin)}/</loc><changefreq>hourly</changefreq><priority>1.0</priority></url>`
+        ];
+
+        for (const c of (cats || [])) {
+          if (c.name) {
+            lines.push(`  <url><loc>${xmlEsc(`${baseOrigin}/?category=${encodeURIComponent(c.name)}`)}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`);
+          }
+        }
+
+        for (const t of (tagRows || [])) {
+          if (t.name) {
+            lines.push(`  <url><loc>${xmlEsc(`${baseOrigin}/?tag=${encodeURIComponent(t.name)}`)}</loc><changefreq>daily</changefreq><priority>0.7</priority></url>`);
+          }
+        }
+
+        for (const v of (vids || [])) {
+          const loc = `${baseOrigin}/?v=${encodeURIComponent(v.id)}`;
+          const lastmod = (v.updated_at || v.created_at || new Date().toISOString()).slice(0, 10);
+          const vTitle = v.seoTitle || v.title || 'Viral Video';
+          const vDesc = v.seoDescription || v.description || `Watch ${vTitle} online in HD.`;
+          let thumb = String(v.thumbnail || '').trim();
+          if (thumb.startsWith('/cdn/')) thumb = `${baseOrigin}${thumb}`;
+          let contentLoc = String(v.videoUrl || '').trim();
+          if (contentLoc.startsWith('/cdn/')) contentLoc = `${baseOrigin}${contentLoc}`;
+
+          let tagXml = '';
+          try {
+            const parsedTags = Array.isArray(v.tags) ? v.tags : JSON.parse(v.tags || '[]');
+            if (Array.isArray(parsedTags)) {
+              tagXml = parsedTags.slice(0, 10).map(t => `      <video:tag>${xmlEsc(t)}</video:tag>`).join('\n');
+            }
+          } catch {}
+
+          lines.push(
+            `  <url>`,
+            `    <loc>${xmlEsc(loc)}</loc>`,
+            `    <lastmod>${xmlEsc(lastmod)}</lastmod>`,
+            `    <changefreq>weekly</changefreq>`,
+            `    <priority>0.9</priority>`,
+            `    <video:video>`,
+            thumb ? `      <video:thumbnail_loc>${xmlEsc(thumb)}</video:thumbnail_loc>` : '',
+            `      <video:title>${xmlEsc(vTitle.slice(0, 100))}</video:title>`,
+            `      <video:description>${xmlEsc(vDesc.slice(0, 2000))}</video:description>`,
+            contentLoc ? `      <video:content_loc>${xmlEsc(contentLoc)}</video:content_loc>` : '',
+            v.category ? `      <video:category>${xmlEsc(v.category)}</video:category>` : '',
+            tagXml,
+            `    </video:video>`,
+            `  </url>`
+          );
+        }
+
+        lines.push('</urlset>');
+        return new Response(lines.filter(Boolean).join('\n'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Cache-Control': 'public, max-age=1800'
+          }
+        });
+      } catch (e) {
+        return new Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>', {
+          status: 200,
+          headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+        });
       }
+    }
+
+    // Serve Frontend Static Assets if not an /api route (with Edge Dynamic SEO/AEO/GEO Injection + SPA fallback)
+    if (!pathname.startsWith('/api') && !pathname.startsWith('/cdn/') && env.ASSETS) {
+      let assetRes = await env.ASSETS.fetch(request);
+      if (assetRes.status === 404) {
+        assetRes = await env.ASSETS.fetch(new Request(new URL('/', request.url), request));
+      }
+
+      const contentType = assetRes.headers.get('content-type') || '';
+      const videoIdParam = url.searchParams.get('v');
+      const catParam = url.searchParams.get('category');
+      const tagParam = url.searchParams.get('tag');
+
+      if (contentType.includes('text/html') && (videoIdParam || catParam || tagParam)) {
+        try {
+          let html = await assetRes.text();
+          const htmlEsc = (s) => String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+          let pageTitle = '';
+          let pageDesc = '';
+          let pageKeywords = '';
+          let pageImage = '';
+          let canonicalHref = `${url.origin}${pathname}${url.search}`;
+          let extraHeadTags = '';
+
+          if (videoIdParam) {
+            const vid = await env.DB.prepare(
+              "SELECT id, title, description, category, tags, thumbnail, videoUrl, seoTitle, seoDescription, canonicalUrl, aeoSummary, aeoKeyFacts, geoEntities, schemaJsonLd FROM videos WHERE id = ? AND COALESCE(privacy, 'public') != 'private' LIMIT 1"
+            ).bind(videoIdParam).first();
+
+            if (vid) {
+              pageTitle = vid.seoTitle || `${vid.title} - Full HD Video | VIRALKAAM`;
+              pageDesc = vid.seoDescription || vid.aeoSummary || vid.description || `Watch ${vid.title} online in HD on VIRALKAAM.`;
+              canonicalHref = `${url.origin}/?v=${encodeURIComponent(vid.id)}`;
+              let thumb = String(vid.thumbnail || '').trim();
+              if (thumb.startsWith('/cdn/')) thumb = `${url.origin}${thumb}`;
+              pageImage = thumb;
+
+              let kwArr = [];
+              try {
+                const ge = JSON.parse(vid.geoEntities || '[]');
+                if (Array.isArray(ge)) kwArr = kwArr.concat(ge);
+              } catch {}
+              try {
+                const tg = JSON.parse(vid.tags || '[]');
+                if (Array.isArray(tg)) kwArr = kwArr.concat(tg);
+              } catch {}
+              if (vid.category) kwArr.push(vid.category);
+              pageKeywords = Array.from(new Set(kwArr.filter(Boolean))).join(', ');
+
+              if (vid.schemaJsonLd) {
+                extraHeadTags += `\n    <script type="application/ld+json">${vid.schemaJsonLd.replace(/<\/script>/gi, '<\\/script>')}</script>`;
+              }
+
+              // Inject FAQPage Schema from AEO Key Facts for AI Answer Engines & Google Rich Snippets
+              if (vid.aeoKeyFacts) {
+                try {
+                  const facts = JSON.parse(vid.aeoKeyFacts);
+                  if (Array.isArray(facts) && facts.length > 0) {
+                    const faqSchema = {
+                      '@context': 'https://schema.org',
+                      '@type': 'FAQPage',
+                      mainEntity: facts.map(f => ({
+                        '@type': 'Question',
+                        name: f.question,
+                        acceptedAnswer: { '@type': 'Answer', text: f.answer }
+                      }))
+                    };
+                    extraHeadTags += `\n    <script type="application/ld+json">${JSON.stringify(faqSchema).replace(/<\/script>/gi, '<\\/script>')}</script>`;
+                  }
+                } catch {}
+              }
+            }
+          } else if (catParam) {
+            pageTitle = `${catParam} Videos - Latest HD ${catParam} Viral Clips | VIRALKAAM`;
+            pageDesc = `Watch top ${catParam} videos in Full HD on VIRALKAAM. Daily updated ${catParam} viral clips and fast streaming.`;
+            pageKeywords = `${catParam}, ${catParam} videos, VIRALKAAM, viral videos, HD streaming`;
+            canonicalHref = `${url.origin}/?category=${encodeURIComponent(catParam)}`;
+          } else if (tagParam) {
+            pageTitle = `#${tagParam} Videos - Trending ${tagParam} Clips | VIRALKAAM`;
+            pageDesc = `Browse all #${tagParam} tagged videos in HD on VIRALKAAM. Instant playback and daily updated clips.`;
+            pageKeywords = `${tagParam}, #${tagParam}, ${tagParam} videos, VIRALKAAM, viral clips`;
+            canonicalHref = `${url.origin}/?tag=${encodeURIComponent(tagParam)}`;
+          }
+
+          if (pageTitle) {
+            html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${htmlEsc(pageTitle)}</title>`);
+            html = html.replace(/<meta name="description" content="[^"]*"\s*\/?>/i, `<meta name="description" content="${htmlEsc(pageDesc)}" />`);
+            if (pageKeywords) {
+              html = html.replace(/<meta name="keywords" content="[^"]*"\s*\/?>/i, `<meta name="keywords" content="${htmlEsc(pageKeywords)}" />`);
+            }
+            html = html.replace(/<meta property="og:title" content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${htmlEsc(pageTitle)}" />`);
+            html = html.replace(/<meta property="og:description" content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${htmlEsc(pageDesc)}" />`);
+            html = html.replace(/<meta property="og:url" content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${htmlEsc(canonicalHref)}" />`);
+            html = html.replace(/<meta name="twitter:title" content="[^"]*"\s*\/?>/i, `<meta name="twitter:title" content="${htmlEsc(pageTitle)}" />`);
+            html = html.replace(/<meta name="twitter:description" content="[^"]*"\s*\/?>/i, `<meta name="twitter:description" content="${htmlEsc(pageDesc)}" />`);
+
+            const injectedTags = [
+              `<link rel="canonical" href="${htmlEsc(canonicalHref)}" />`,
+              pageImage ? `<meta property="og:image" content="${htmlEsc(pageImage)}" />` : '',
+              pageImage ? `<meta name="twitter:image" content="${htmlEsc(pageImage)}" />` : '',
+              extraHeadTags
+            ].filter(Boolean).join('\n    ');
+
+            html = html.replace('</head>', `    ${injectedTags}\n  </head>`);
+          }
+
+          const newHeaders = new Headers(assetRes.headers);
+          newHeaders.set('Cache-Control', 'public, max-age=300');
+          return new Response(html, { status: assetRes.status, headers: newHeaders });
+        } catch {
+          return assetRes;
+        }
+      }
+
       return assetRes;
     }
 
@@ -1022,9 +1252,22 @@ export default {
         }
 
         if (search) {
-          conditions.push('(title LIKE ? OR description LIKE ? OR tags LIKE ?)');
-          const qParam = `%${search}%`;
-          bindings.push(qParam, qParam, qParam);
+          const tokens = search
+            .replace(/#/g, ' ')
+            .split(/\s+/)
+            .map(t => t.trim())
+            .filter(t => t.length > 0)
+            .slice(0, 6);
+
+          if (tokens.length > 0) {
+            for (const tok of tokens) {
+              conditions.push(
+                '(LOWER(title) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(tags) LIKE LOWER(?) OR LOWER(COALESCE(seoTitle, \'\')) LIKE LOWER(?) OR LOWER(COALESCE(geoEntities, \'\')) LIKE LOWER(?))'
+              );
+              const qParam = `%${tok}%`;
+              bindings.push(qParam, qParam, qParam, qParam, qParam, qParam);
+            }
+          }
         }
 
         if (category && category.toLowerCase() !== 'all' && category.toLowerCase() !== 'all categories') {

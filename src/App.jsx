@@ -162,9 +162,24 @@ export default function App() {
           }).catch(() => {});
         }
       } else {
+        const urlCat = params.get("category");
+        const urlTag = params.get("tag");
+        const urlSearch = params.get("s") || params.get("q");
+
         setSelectedVideo(null);
         setIsAdminOpen(false);
         setActiveLegalPage(null);
+
+        if (urlCat) {
+          setActiveCategory(urlCat);
+          setActiveTag(null);
+        } else if (urlTag) {
+          setActiveTag(urlTag);
+          setActiveCategory(null);
+        }
+        if (urlSearch) {
+          setSearchQuery(urlSearch);
+        }
       }
     };
 
@@ -214,7 +229,7 @@ export default function App() {
     setSelectedVideo(null);
     setIsAdminOpen(false);
     setActiveLegalPage(null);
-    window.history.pushState({}, "", "/");
+    window.history.pushState({}, "", cat ? `/?category=${encodeURIComponent(cat)}` : "/");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -225,8 +240,21 @@ export default function App() {
     setSelectedVideo(null);
     setIsAdminOpen(false);
     setActiveLegalPage(null);
-    window.history.pushState({}, "", "/");
+    window.history.pushState({}, "", tagName ? `/?tag=${encodeURIComponent(tagName)}` : "/");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleSearchChange = (val) => {
+    setSearchQuery(val);
+    if (val && val.trim().length > 0) {
+      setSelectedVideo(null);
+      setActiveLegalPage(null);
+      setActiveCategory(null);
+      setActiveTag(null);
+      if (window.location.search.includes("v=")) {
+        window.history.pushState({}, "", "/");
+      }
+    }
   };
 
   const handleOpenAdmin = () => {
@@ -327,7 +355,7 @@ export default function App() {
       {/* Top Navbar */}
       <Navbar
         searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
+        setSearchQuery={handleSearchChange}
         onNavigateHome={handleNavigateHome}
         onOpenAdmin={handleOpenAdmin}
         isAdminActive={isAdminOpen}
@@ -392,6 +420,31 @@ export default function App() {
 
           {/* Right Main Grid */}
           <main className="site-content-area">
+            {searchQuery.trim() && (
+              <div className="category-page-header">
+                <h1 className="category-page-title">Search: &ldquo;{searchQuery.trim()}&rdquo;</h1>
+                <p className="category-page-sub">
+                  Found {totalVideosCount.toLocaleString()} matching video{totalVideosCount === 1 ? "" : "s"}
+                </p>
+                <button
+                  type="button"
+                  style={{
+                    marginTop: "10px",
+                    background: "rgba(255, 255, 255, 0.15)",
+                    border: "1px solid rgba(255, 255, 255, 0.3)",
+                    color: "#fff",
+                    borderRadius: "20px",
+                    padding: "4px 14px",
+                    fontSize: "0.8rem",
+                    cursor: "pointer"
+                  }}
+                  onClick={() => setSearchQuery("")}
+                >
+                  ✕ Clear Search
+                </button>
+              </div>
+            )}
+
             {activeCategory && (
               <div className="category-page-header">
                 <h1 className="category-page-title">{activeCategory}</h1>
